@@ -1,3 +1,7 @@
+import os
+os.environ["MUJOCO_GL"] = "egl"    # default: all headless/offscreen use EGL
+os.environ.pop("LD_PRELOAD", None)
+os.environ.setdefault("DISPLAY", ":0")
 import mujoco_py
 import torch
 import gym
@@ -7,15 +11,27 @@ import numpy as np
 from env import cloth_env
 import logging
 
+import multiprocessing as mp  # <-- added
+
 from rlkit.torch import pytorch_util, networks, torch_rl_algorithm
 from rlkit.torch.sac import policies as sac_policies, sac
 from rlkit.torch.her.cloth import her
 from rlkit.launchers import launcher_util
 from rlkit.envs import wrappers
 
+
 from rlkit.samplers.eval_suite import success_rate_test, eval_suite, real_corner_prediction_test
 from rlkit.samplers import data_collector
 from rlkit.data_management import future_obs_dict_replay_buffer
+
+# --- add import near the top ---
+from rlkit.samplers.rollout_functions import rollout
+from threading import Thread, Event
+import time
+import numpy as np
+
+# --- add these imports ---
+from multiprocessing import Process, Event as MPEvent
 
 
 torch.cuda.empty_cache()
@@ -24,12 +40,84 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
 
-def experiment(variant):
-    eval_env = cloth_env.ClothEnv(
-        **variant['env_kwargs'], randomization_kwargs=variant['randomization_kwargs'])
+# --- top-level viewer process (must be picklable for spawn) ---
+def watch_proc_fn(variant, stop_event):
+    import os, time, traceback, numpy as np, cv2
+    # Force EGL for headless render; no need for GLX/GLEW.
+    for k in [
+        "MUJOCO_EGL_DEVICE_ID", "MUJOCO_GL_OFFSCREEN", "LIBGL_ALWAYS_SOFTWARE",
+        "MESA_GL_VERSION_OVERRIDE", "MESA_LOADER_DRIVER_OVERRIDE", "LD_PRELOAD",
+        "PYOPENGL_PLATFORM",
+    ]:
+        os.environ.pop(k, None)
+    os.environ["MUJOCO_GL"] = "egl"
 
+    try:
+        from env import cloth_env
+        from rlkit.envs import wrappers
+        from utils import general_utils
+
+        # Create an offscreen-rendering env
+        vis_env = cloth_env.ClothEnv(
+            **variant['env_kwargs'],
+            randomization_kwargs=variant['randomization_kwargs'],
+            has_viewer=True,                 # important: create offscreen context
+            viewer_mode="offscreen",         # EGL path
+        )
+        vis_env = general_utils.get_randomized_env(
+            wrappers.NormalizedBoxEnv(vis_env),
+            randomization_kwargs=variant['randomization_kwargs'],
+        )
+
+        max_len = variant['eval_kwargs']['max_path_length']
+        cv2.namedWindow("MuJoCo Watch", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("MuJoCo Watch", 640, 640)
+
+        while not stop_event.is_set():
+            vis_env.reset()
+            steps = 0
+            while steps < max_len and not stop_event.is_set():
+                # gentle random motion just to keep it moving
+                a = vis_env.action_space.sample() * 0.2
+                obs, _, _, _ = vis_env.step(a)
+
+                # grab a rendered grayscale network input and show it
+                # (uses the same camera/settings as training)
+                img = vis_env.get_image_obs().reshape(
+                    vis_env.image_size[1], vis_env.image_size[0]
+                )
+                # scale to 0..255 for display
+                frame = (img * 255).astype("uint8")
+                cv2.imshow("MuJoCo Watch", frame)
+                # allow close with ESC
+                if cv2.waitKey(1) & 0xFF == 27:
+                    stop_event.set()
+                    break
+
+                steps += 1
+                time.sleep(0.01)
+
+        cv2.destroyAllWindows()
+    except Exception:
+        traceback.print_exc()
+        # fail silently so training continues
+        return
+
+
+
+def experiment(variant):
+    # 1) Main eval env: headless (no window)
+    import os; print("MAIN MUJOCO_GL =", os.environ.get("MUJOCO_GL"))
+    eval_env = cloth_env.ClothEnv(
+        **variant['env_kwargs'],
+        randomization_kwargs=variant['randomization_kwargs'],
+        has_viewer=True,
+        viewer_mode="offscreen",
+    )
     randomized_eval_env = general_utils.get_randomized_env(
-        wrappers.NormalizedBoxEnv(eval_env), randomization_kwargs=variant['randomization_kwargs'])
+        wrappers.NormalizedBoxEnv(eval_env),
+        randomization_kwargs=variant['randomization_kwargs'],
+    )
 
     env_keys, env_dims = general_utils.get_keys_and_dims(
         variant, randomized_eval_env)
@@ -65,6 +153,17 @@ def experiment(variant):
 
     eval_policy = sac_policies.MakeDeterministic(policy)
 
+    # ------------------ WATCH PROCESS (spawned, optional) ------------------
+    enable_gui = os.getenv("SHOW_WATCH", "0") in ("1", "true", "True", "YES", "yes")
+    watcher = None
+    stop_watch = None
+    if enable_gui:
+        ctx = mp.get_context("spawn")
+        stop_watch = ctx.Event()
+        watcher = ctx.Process(target=watch_proc_fn, args=(variant, stop_watch))
+        watcher.start()
+    # ------------------------------------------------------------
+
     success_test = success_rate_test.SuccessRateTest(
         env=randomized_eval_env,
         policy=eval_policy,
@@ -86,10 +185,25 @@ def experiment(variant):
     evaluation_suite = eval_suite.EvalTestSuite(
         tests=[success_test, real_corner_test])
 
+    # 3) vectorized workers
     def make_worker_env_function():
-        return general_utils.get_randomized_env(wrappers.NormalizedBoxEnv(cloth_env.ClothEnv(**variant['env_kwargs'], randomization_kwargs=variant['randomization_kwargs'])), randomization_kwargs=variant['randomization_kwargs'])
+        def _fn():
+            import os; print("WORKER MUJOCO_GL =", os.environ.get("MUJOCO_GL"))
+            os.environ["MUJOCO_GL"] = "egl"
+            os.environ.pop("LD_PRELOAD", None)
+            env = cloth_env.ClothEnv(
+                **variant['env_kwargs'],
+                randomization_kwargs=variant['randomization_kwargs'],
+                has_viewer=True,
+                viewer_mode="offscreen",
+            )
+            return general_utils.get_randomized_env(
+                wrappers.NormalizedBoxEnv(env),
+                randomization_kwargs=variant['randomization_kwargs'],
+            )
+        return _fn
 
-    env_functions = [make_worker_env_function for _ in range(
+    env_functions = [make_worker_env_function() for _ in range(
         variant['path_collector_kwargs']['num_processes'])]
     vec_env = wrappers.SubprocVecEnv(env_functions)
 
@@ -137,6 +251,10 @@ def experiment(variant):
     with mujoco_py.ignore_mujoco_warnings():
         algorithm.train()
 
+    if stop_watch is not None:
+        stop_watch.set()
+    if watcher is not None:
+        watcher.join(timeout=2.0)
     vec_env.close()
     logger.debug("Closed subprocesses")
     return

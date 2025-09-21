@@ -1,3 +1,65 @@
-README-INTERNAL.md
-tblogs
-trainings
+# --- Python basics ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+
+# virtual envs
+.venv/
+venv/
+env/
+
+# packaging/build
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+SOURCES.txt
+PKG-INFO
+top_level.txt
+dependency_links.txt
+
+# tests/tools
+.pytest_cache/
+.mypy_cache/
+coverage.xml
+htmlcov/
+.coverage*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Project specific ---
+# Training outputs & logs (huge, reproducible)
+trainings/
+epochs/
+profiling/
+tblogs/
+MUJOCO_LOG.TXT
+
+# Saved models & checkpoints (handled via LFS if you ever want them)
+*.mdl
+*.pth
+*.pt
+
+# Generated plots & artifacts
+exploration_*.png
+
+# Mujoco-py / cython build dust in submodules
+submodules/**/build/
+submodules/**/generated/
+submodules/**/mujoco_py/*.c
+submodules/**/mujoco_py/*.cpp
+submodules/**/mujoco_py/generated/*.so
+submodules/**/mujoco_py/generated/_pyxbld_*/
+
+# Local config not meant for CI
+settings.json

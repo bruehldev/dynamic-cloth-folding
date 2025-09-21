@@ -22,6 +22,7 @@ import albumentations as A
 import pandas as pd
 from utils import task_definitions
 import logging
+from mujoco_py.generated import const as mjc
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
@@ -63,6 +64,7 @@ class ClothEnv_(object):
         image_obs_noise_std=0,
         has_viewer=True,
         image_size=100,
+        viewer_mode="offscreen"  # NEW: add viewer_mode kwarg
     ):
         self.albumentations_transform = A.Compose(
             [
@@ -101,6 +103,7 @@ class ClothEnv_(object):
         self.image_size = (image_size, image_size)
 
         self.has_viewer = has_viewer
+        self.viewer_mode = viewer_mode  # "offscreen" (default) or "onscreen"
         self.image_obs_noise_mean = image_obs_noise_mean
         self.image_obs_noise_std = image_obs_noise_std
         self.robot_observation = robot_observation
@@ -253,11 +256,45 @@ class ClothEnv_(object):
         return model_kwargs, model_numerical_values
 
     def setup_viewer(self):
-        if self.has_viewer:
-            if not self.viewer is None:
-                del self.viewer
-            self.viewer = mujoco_py.MjRenderContextOffscreen(
-                self.sim, device_id=-1)
+        if not self.has_viewer:
+            self.viewer = None
+            return
+
+        # Clean up any previous viewer
+        if self.viewer is not None:
+            try:
+                # Offscreen contexts have a .free() in newer mujoco-py; ignore if missing
+                if hasattr(self.viewer, "free"):
+                    self.viewer.free()
+            except Exception:
+                pass
+            self.viewer = None
+
+        if self.viewer_mode == "onscreen":
+            # Ensure a windowed GL backend
+            import os
+            os.environ.setdefault("MUJOCO_GL", "glfw")
+            self.viewer = mujoco_py.MjViewer(self.sim)
+
+            # Show a fixed MuJoCo camera (your self.train_camera)
+            try:
+                cam_id = self.sim.model.camera_name2id(self.train_camera)
+                self.viewer.cam.fixedcamid = cam_id
+                self.viewer.cam.type = mjc.CAMERA_FIXED
+            except Exception:
+                # Fall back to free camera if named camera is missing
+                self.viewer.cam.type = mjc.CAMERA_FREE
+
+        else:
+            # Offscreen rendering (force EGL)
+            import os
+            os.environ.setdefault("MUJOCO_GL", "egl")
+            try:
+                self.viewer = mujoco_py.MjRenderContextOffscreen(self.sim, device_id=0)
+            except Exception:
+                # some drivers prefer -1
+                self.viewer = mujoco_py.MjRenderContextOffscreen(self.sim, device_id=-1)
+            # Toggle geom groups like before
             self.viewer.vopt.geomgroup[0] = 0
             self.viewer.vopt.geomgroup[1] = 1
 
@@ -282,6 +319,15 @@ class ClothEnv_(object):
         des_cam_look_pos = self.sim.data.get_body_xpos(
             f"B{self.mid_corner_index}_{self.mid_corner_index}").copy() + lookat_offset
         self.sim.data.set_mocap_pos("lookatbody", des_cam_look_pos)
+
+        # If GUI is on, keep viewer camera synced to the chosen train camera
+        if self.viewer_mode == "onscreen" and self.viewer is not None:
+            try:
+                cam_id = self.sim.model.camera_name2id(self.train_camera)
+                self.viewer.cam.fixedcamid = cam_id
+                self.viewer.cam.type = mjc.CAMERA_FIXED
+            except Exception:
+                self.viewer.cam.type = mjc.CAMERA_FREE
 
     def add_mocap_to_xml(self, xml):
         dom = minidom.parseString(xml)
@@ -626,16 +672,28 @@ class ClothEnv_(object):
         return velocities
 
     def get_image_obs(self):
-        camera_id = self.sim.model.camera_name2id(
-            self.train_camera)
+        # If no viewer (headless workers), return a blank grayscale frame
+        if self.viewer is None and self.has_viewer:
+            self.setup_viewer()
+        if self.viewer is None:
+            h, w = self.image_size
+            return np.zeros((h, w), dtype=np.float32).flatten()
+        camera_id = self.sim.model.camera_name2id(self.train_camera)
         width = self.randomization_kwargs['camera_config']['width']
         height = self.randomization_kwargs['camera_config']['height']
 
-        self.viewer.render(width, height, camera_id)
-        image_obs = copy.deepcopy(
-            self.viewer.read_pixels(width, height, depth=False))
+        if self.viewer_mode == "onscreen":
+            # Render the window from the fixed camera; then read back pixels
+            if hasattr(self.viewer.cam, "fixedcamid"):
+                self.viewer.cam.fixedcamid = camera_id
+                self.viewer.cam.type = mjc.CAMERA_FIXED
+            self.viewer.render()
+            image_obs = np.array(self.viewer.read_pixels(width, height, depth=False))
+        else:
+            self.viewer.render(width, height, camera_id)
+            image_obs = copy.deepcopy(self.viewer.read_pixels(width, height, depth=False))
 
-        image_obs = image_obs[::-1, :, :]
+        image_obs = image_obs[::-1, :, :]  # flip vertical like before
 
         height_start = int(image_obs.shape[0]/2 - self.image_size[1]/2)
         height_end = height_start + self.image_size[1]
