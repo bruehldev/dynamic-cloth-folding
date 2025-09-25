@@ -1,3 +1,4 @@
+# env/cloth_env.py:
 import mujoco_py
 import osc_binding
 import cv2
@@ -22,6 +23,8 @@ import albumentations as A
 import pandas as pd
 from utils import task_definitions
 import logging
+from df_logging import RunLogger
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
@@ -63,7 +66,9 @@ class ClothEnv_(object):
         image_obs_noise_std=0,
         has_viewer=True,
         image_size=100,
+        logger: Optional[RunLogger] = None
     ):
+        self.logger = logger
         self.albumentations_transform = A.Compose(
             [
                 A.RGBShift(r_shift_limit=15, g_shift_limit=15,
@@ -116,7 +121,7 @@ class ClothEnv_(object):
         self.control_frequency = control_frequency
 
         steps_per_second = 1 / self.timestep
-        self.substeps = 1 / (self.timestep*self.control_frequency)
+        self.substeps = int(1 / (self.timestep*self.control_frequency))
         self.between_steps = 1000 / steps_per_second
         self.delta_tau_max = 1000 / steps_per_second
         self.eval_camera = "eval_camera"
@@ -385,6 +390,8 @@ class ClothEnv_(object):
         raw_action = action.copy()
         action = raw_action*self.output_max
 
+        prev_action_before_update = self.previous_raw_action.copy()
+
         image_obs_substep_idx_mean = self.image_obs_noise_mean * \
             (self.substeps-1)
         image_obs_substep_idx = int(np.random.normal(
@@ -394,18 +401,35 @@ class ClothEnv_(object):
 
         cosine_distance = compute_cosine_distance(
             self.previous_raw_action, raw_action)
-        self.previous_raw_action = raw_action
 
         previous_desired_pos_step_W = self.desired_pos_step_W.copy()
         desired_pos_step_W = previous_desired_pos_step_W + action
         self.desired_pos_step_W = np.clip(
             desired_pos_step_W, self.min_absolute_W, self.max_absolute_W)
+        x_target = self.desired_pos_step_W.copy()
 
-        for i in range(int(self.substeps)):
+        ctrl_samples = []
+        flattened_corners = None
+        image_obs = None
+
+        # Policy-Step-Zähler
+        self.current_step = getattr(self, "current_step", 0)
+
+        for i in range(self.substeps):
             for j in range(int(self.between_steps)):
-                self.desired_pos_ctrl_W = self.filter*self.desired_pos_step_W + \
-                    (1-self.filter)*self.desired_pos_ctrl_W
+                self.desired_pos_ctrl_W = self.filter * self.desired_pos_step_W + (1 - self.filter) * self.desired_pos_ctrl_W
             self.step_env()
+
+            if i in (0, int(self.substeps / 2), int(self.substeps - 1)):
+                ctrl_samples.append({
+                    "idx": int(i + 1),
+                    "x_des": self.desired_pos_ctrl_W.tolist(),
+                    "q_cmd": self.target_qpos.tolist() if hasattr(self, "target_qpos") else None,
+                    "q": self.get_joint_positions().tolist(),
+                    "dq": self.get_joint_velocities().tolist(),
+                    "x_ee": self.get_ee_position_W().tolist()
+                })
+
             if i == image_obs_substep_idx:
                 image_obs = self.get_image_obs()
                 self.frame_stack.append(image_obs)
@@ -414,6 +438,50 @@ class ClothEnv_(object):
         obs = self.get_obs()
         reward, done, info = self.post_action(obs, raw_action, cosine_distance)
         info['corner_positions'] = flattened_corners
+
+        # Logging
+        if self.logger:
+            img_u8 = (image_obs.reshape(self.image_size) * 255).astype("uint8")
+            img_info = self.logger.save_image_gray(img_u8)
+            ctrl_block = self.logger.build_controller_block(policy_step=self.current_step, substeps=ctrl_samples)
+            rec = {
+                "t_policy": float(self.timestep * self.current_step),
+                "episode_step": int(self.current_step),
+                "obs": {
+                    "image": img_info,
+                    "q": self.get_joint_positions().tolist(),
+                    "dq": self.get_joint_velocities().tolist(),
+                    "x_ee": self.get_ee_position_W().tolist(),
+                    "g": self.goal.tolist(),
+                    "a_prev": prev_action_before_update.tolist()
+                },
+                "action": {
+                    "a": raw_action.tolist(),
+                    "x_target": x_target.tolist(),
+                    "interp_lambda": float(self.filter),
+                    "cloth_uv_pred": info.get("predicted_corners", None)
+                },
+                "task": {
+                    "reward_t": float(reward),
+                    "dsum": float(info.get("dsum", 0.0)),
+                    "done": bool(done),
+                    "success": bool(info.get("is_success", False))
+                }
+            }
+            self.logger.log_policy_step(self.current_step, rec, controller_block=ctrl_block)
+
+        if done and self.logger:
+            summary = {
+                "steps": int(self.current_step + 1),
+                "success": bool(info.get("is_success", False)),
+                "final_dsum": float(info.get("dsum", 0.0)),
+                "termination_reason": info.get("termination_reason", "")
+            }
+            self.logger.end_episode(summary)
+
+        self.previous_raw_action = raw_action.copy()
+        self.current_step += 1
+
         return obs, reward, done, info
 
     def compute_task_reward(self, achieved_goal, desired_goal, info):
@@ -475,6 +543,7 @@ class ClothEnv_(object):
             info[f"corner_{key}"] = constraint_distances[key]
             info["corner_sum_error"] += constraint_distances[key]
 
+        info["dsum"] = info["corner_sum_error"]
         done = False
 
         if constraint_distances["1"] < self.success_distance:
@@ -736,9 +805,9 @@ class ClothEnv_(object):
         self.sim.set_state(self.initial_state)
         self.sim.data.qfrc_applied[self.joint_vel_addr] = self.initial_qfrc_applied
         self.sim.data.qfrc_bias[self.joint_vel_addr] = self.initial_qfrc_bias
-        self.sim.forward()  # BODY POSITIONS CORRECT
+        self.sim.forward()
         self.reset_camera()
-        self.sim.forward()  # CAMERA CHANGES CORRECT
+        self.sim.forward()
         self.reset_osc_values()
         self.update_osc_values()
 
@@ -749,13 +818,30 @@ class ClothEnv_(object):
             del self.viewer._markers[:]
 
         self.episode_ee_close_steps = 0
+        self.current_step = 0
+
+        # Episode-Metadaten loggen
+        if self.logger:
+            meta = {
+                "env": "MuJoCo",
+                "seed": int(getattr(self, "seed_val", 0)),
+                "physics_params": list(getattr(self, "mujoco_model_numerical_values", [])),
+                "randomization_kwargs": self.randomization_kwargs,
+                "delay_cfg": {"image_obs_noise_mean": self.image_obs_noise_mean,
+                              "image_obs_noise_std": self.image_obs_noise_std},
+                "horizon": 250,
+                "delta_success": float(self.success_distance)
+            }
+            self.logger.start_episode(meta)
 
         image_obs = self.get_image_obs()
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(image_obs)
 
-        q_ok = np.allclose(self.initial_qpos,
-                           self.get_joint_positions(), rtol=0.01, atol=0.01)
+        if self.logger:
+            img_u8 = (image_obs.reshape(self.image_size) * 255).astype("uint8")
+            img_info = self.logger.save_image_gray(img_u8)
+            self._last_img_info = img_info
 
         return self.get_obs()
 
