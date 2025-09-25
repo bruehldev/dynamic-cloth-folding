@@ -83,6 +83,27 @@ class ClothEnv_(object):
         )
 
         self.model_kwargs_path = model_kwargs_path
+        self.model_kwargs_df = None
+        self.expected_model_cols = None
+        try:
+            if self.model_kwargs_path and os.path.exists(self.model_kwargs_path):
+                df = pd.read_csv(self.model_kwargs_path)
+                # "Unnamed: 0" o.ä. verwerfen
+                df = df.loc[:, ~df.columns.str.contains(r'^Unnamed', case=False, regex=True)]
+                self.model_kwargs_df = df
+                self.expected_model_cols = list(df.columns)
+                if self.logger:
+                    self.logger.log_text(f"[ClothEnv] Loaded model kwargs CSV with {len(df)} rows.", level="info")
+            else:
+                self.model_kwargs_df = pd.DataFrame()
+                self.expected_model_cols = []
+                if self.logger:
+                    self.logger.log_text("[ClothEnv] Model kwargs CSV not found – using empty dataframe.", level="warning")
+        except Exception as e:
+            self.model_kwargs_df = pd.DataFrame()
+            self.expected_model_cols = []
+            msg = f"[ClothEnv] Failed to load model kwargs CSV: {e}"
+            (self.logger.log_text(msg, level="warning") if self.logger else print(msg))
         self.success_distance = success_distance
 
         self.process = psutil.Process(os.getpid())
@@ -171,26 +192,80 @@ class ClothEnv_(object):
                                  shape=obs['image'].shape, dtype='float32')
         ))
 
-    def get_model_kwargs(self, randomize, rownum=None):
-        df = pd.read_csv(self.model_kwargs_path)
+    def get_model_kwargs(self, *args, **kwargs):
+        import numpy as np
+        df = getattr(self, "model_kwargs_df", None)
+        model_kwargs = {}
 
-        model_kwargs = copy.deepcopy(mujoco_model_kwargs.BASE_MODEL_KWARGS)
+        # Falls kein DF: leere Defaults
+        if df is None or len(df) == 0:
+            if self.logger:
+                self.logger.log_text("[ClothEnv] get_model_kwargs: CSV empty/missing – using defaults.", level="warning")
+            # Mindestens für build_xml_kwargs_and_numerical_values benötigt:
+            # geom_size wird weiter unten auch noch abgesichert
+            return model_kwargs
 
-        if randomize:
-            choice = np.random.randint(0, df.shape[0] - 1)
-            model_kwargs_row = df.iloc[choice]
+        rownum = kwargs.get("rownum", None)
+        model_kwargs_row = None
 
-        if rownum is not None:
+        # 1) Falls eine explizite Zeile gewünscht ist
+        if isinstance(rownum, int) and 0 <= rownum < len(df):
             model_kwargs_row = df.iloc[rownum]
 
-        for col in model_kwargs.keys():
-            model_kwargs[col] = model_kwargs_row[col]
+        # 2) Sonst versuchen wir, sinnvoll zu matchen (falls Spalten vorhanden)
+        if model_kwargs_row is None:
+            matches = df
+            # Cloth size match (wenn Spalte existiert)
+            if "cloth_size" in df.columns:
+                try:
+                    cs = float(self.randomization_kwargs.get("cloth_size", np.nan))
+                    matches = matches[np.isclose(matches["cloth_size"].astype(float), cs, atol=1e-9, rtol=0, equal_nan=True)]
+                except Exception:
+                    pass
+            # Camera config match (wenn Spalte existiert)
+            cam_type = None
+            try:
+                cam_cfg = self.randomization_kwargs.get("camera_config", {})
+                # dein CSV könnte "camera_config" oder "camera_type" haben
+                cam_type = cam_cfg.get("type", None)
+            except Exception:
+                cam_type = None
+
+            if cam_type is not None:
+                if "camera_config" in df.columns:
+                    matches = matches[matches["camera_config"].astype(str) == str(cam_type)]
+                elif "camera_type" in df.columns:
+                    matches = matches[matches["camera_type"].astype(str) == str(cam_type)]
+
+            # Erstes Match nehmen
+            if len(matches) > 0:
+                model_kwargs_row = matches.iloc[0]
+
+        # 3) Fallback: erste Zeile des DF
+        if model_kwargs_row is None:
+            if self.logger:
+                self.logger.log_text("[ClothEnv] get_model_kwargs: no match – falling back to first CSV row.", level="warning")
+            model_kwargs_row = df.iloc[0]
+
+        # 4) Key-Value übernehmen
+        expected_cols = getattr(self, "expected_model_cols", list(df.columns))
+        for col in expected_cols:
+            if col in model_kwargs_row.index:
+                model_kwargs[col] = model_kwargs_row[col]
+
+        # 5) Harte Defaults für keys, die später zwingend verwendet werden
+        #    build_xml_kwargs_and_numerical_values nutzt z.B. 'geom_size'
+        model_kwargs.setdefault("geom_size", 0.005)  # konservativer Default
 
         return model_kwargs
+
+
 
     def build_xml_kwargs_and_numerical_values(self, randomize, rownum=None):
         model_kwargs = self.get_model_kwargs(
             randomize=randomize, rownum=rownum)
+        model_kwargs.setdefault("geom_size", 0.005)
+
 
         model_numerical_values = []
         for key in model_kwargs.keys():
