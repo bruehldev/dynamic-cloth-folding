@@ -69,6 +69,23 @@ class ClothEnv_(object):
         logger: Optional[RunLogger] = None
     ):
         self.logger = logger
+        _pylog = logging.getLogger(__name__) 
+
+        def _note(level, msg):
+            if level == "info":
+                _pylog.info(msg)
+            elif level == "warning":
+                _pylog.warning(msg)
+            elif level == "error":
+                _pylog.error(msg)
+            else:
+                _pylog.debug(msg)
+
+        self._note = _note
+        from tools.jsonl_tap import StepTap
+        self._backend_name = "mujoco"
+        self._episode_idx = 0
+        self._tap = StepTap(os.path.join(save_folder, f"step_tap_{self._backend_name}.jsonl"))
         self.albumentations_transform = A.Compose(
             [
                 A.RGBShift(r_shift_limit=15, g_shift_limit=15,
@@ -93,17 +110,17 @@ class ClothEnv_(object):
                 self.model_kwargs_df = df
                 self.expected_model_cols = list(df.columns)
                 if self.logger:
-                    self.logger.log_text(f"[ClothEnv] Loaded model kwargs CSV with {len(df)} rows.", level="info")
+                    self._note("info", f"[ClothEnv] Loaded model kwargs CSV with {len(df)} rows.")
             else:
                 self.model_kwargs_df = pd.DataFrame()
                 self.expected_model_cols = []
                 if self.logger:
-                    self.logger.log_text("[ClothEnv] Model kwargs CSV not found – using empty dataframe.", level="warning")
+                    self._note("warning", "[ClothEnv] Model kwargs CSV not found – using empty dataframe.")
         except Exception as e:
             self.model_kwargs_df = pd.DataFrame()
             self.expected_model_cols = []
             msg = f"[ClothEnv] Failed to load model kwargs CSV: {e}"
-            (self.logger.log_text(msg, level="warning") if self.logger else print(msg))
+            self._note("warning", msg)
         self.success_distance = success_distance
 
         self.process = psutil.Process(os.getpid())
@@ -200,7 +217,8 @@ class ClothEnv_(object):
         # Falls kein DF: leere Defaults
         if df is None or len(df) == 0:
             if self.logger:
-                self.logger.log_text("[ClothEnv] get_model_kwargs: CSV empty/missing – using defaults.", level="warning")
+                self._note("warning", "[ClothEnv] get_model_kwargs: CSV empty/missing – using defaults.")
+
             # Mindestens für build_xml_kwargs_and_numerical_values benötigt:
             # geom_size wird weiter unten auch noch abgesichert
             return model_kwargs
@@ -244,7 +262,7 @@ class ClothEnv_(object):
         # 3) Fallback: erste Zeile des DF
         if model_kwargs_row is None:
             if self.logger:
-                self.logger.log_text("[ClothEnv] get_model_kwargs: no match – falling back to first CSV row.", level="warning")
+                self._note("warning", "[ClothEnv] get_model_kwargs: no match – falling back to first CSV row.")
             model_kwargs_row = df.iloc[0]
 
         # 4) Key-Value übernehmen
@@ -556,6 +574,18 @@ class ClothEnv_(object):
 
         self.previous_raw_action = raw_action.copy()
         self.current_step += 1
+
+
+        if hasattr(self, "_tap") and self._tap:
+            self._tap.log_step(
+                backend=self._backend_name,
+                episode=self._episode_idx,
+                t=int(self.current_step),
+                action=self.previous_raw_action.tolist(),  # <— ensure serializable
+                reward=float(reward),
+                done=bool(done),
+                info={k: (float(v) if isinstance(v, (np.floating,)) else v) for k, v in info.items()},
+            )
 
         return obs, reward, done, info
 
@@ -918,6 +948,7 @@ class ClothEnv_(object):
             img_info = self.logger.save_image_gray(img_u8)
             self._last_img_info = img_info
 
+        self._episode_idx += 1
         return self.get_obs()
 
     def get_corner_image_positions(self, w, h, camera_matrix, camera_transformation):
