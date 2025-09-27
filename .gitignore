@@ -9,7 +9,6 @@ __pycache__/
 # virtual envs
 .venv/
 venv/
-env/
 
 # packaging/build
 build/
@@ -64,3 +63,4 @@ submodules/**/mujoco_py/generated/_pyxbld_*/
 
 # Local config not meant for CI
 settings.json
+terminal.log

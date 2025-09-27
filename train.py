@@ -1,5 +1,4 @@
 # train.py:
-import mujoco_py
 from rlkit.core import trainer
 import torch
 torch.backends.cudnn.benchmark = True
@@ -7,10 +6,23 @@ import gym
 from utils import general_utils
 import copy
 import numpy as np
-from env import cloth_env
+import os
+BACKEND = os.getenv('PHYSICS', 'bullet').lower()
+SKIP_DR = os.getenv('NO_DR', '1') == '1'
+
+if BACKEND == 'bullet':
+    from env.cloth_env_pybullet import ClothEnvBullet as ClothEnv
+else:
+    from env.cloth_env import ClothEnv
+
+def _maybe_randomize(wrapped_env, randomization_kwargs):
+    if SKIP_DR:
+        return wrapped_env
+    from utils import general_utils
+    return general_utils.get_randomized_env(wrapped_env, randomization_kwargs=randomization_kwargs)
+
 import logging
 from df_logging import RunLogger
-import os
 
 from rlkit.torch import pytorch_util, networks, torch_rl_algorithm
 from rlkit.torch.sac import policies as sac_policies, sac
@@ -27,6 +39,131 @@ torch.cuda.empty_cache()
 gym.logger.set_level(50)
 pylog = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+
+
+# ---- NaN/Inf-Schutz für jede Env (bevor NormalizedBoxEnv) -------------------
+import numpy as _np
+import gym as _gym
+
+class SanitizeObsWrapper(_gym.Wrapper):
+    """
+    Ersetzt NaN/Inf in allen Dict-Observationen & clipt auf sinnvolle Bereiche.
+    Greift sowohl in reset() als auch step().
+    """
+    def __init__(self, env, clip_dict=None):
+        super().__init__(env)
+        # optionale Clip-Grenzen je Key; default: keine Clips
+        self.clip_dict = clip_dict or {}
+
+    def _clean(self, obs):
+        if isinstance(obs, dict):
+            out = {}
+            for k, v in obs.items():
+                arr = _np.asarray(v, dtype=_np.float32)
+                arr = _np.nan_to_num(arr, nan=0.0, posinf=1e3, neginf=-1e3)
+                low, high = self.clip_dict.get(k, (None, None))
+                if low is not None or high is not None:
+                    lo = -_np.inf if low is None else low
+                    hi = _np.inf if high is None else high
+                    arr = _np.clip(arr, lo, hi)
+                out[k] = arr
+            return out
+        else:
+            arr = _np.asarray(obs, dtype=_np.float32)
+            arr = _np.nan_to_num(arr, nan=0.0, posinf=1e3, neginf=-1e3)
+            return arr
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        return self._clean(obs)
+
+    def step(self, action):
+        obs, rew, done, info = self.env.step(action)
+        return self._clean(obs), float(rew), bool(done), info
+# -----------------------------------------------------------------------------
+
+
+class PostNormalizeSanitizer(_gym.Wrapper):
+    """Fängt NaN/Inf ab, die evtl. durch NormalizedBoxEnv entstehen."""
+    def _clean(self, obs):
+        if isinstance(obs, dict):
+            return {k: _np.nan_to_num(_np.asarray(v, _np.float32),
+                                      nan=0.0, posinf=1e3, neginf=-1e3)
+                    for k, v in obs.items()}
+        return _np.nan_to_num(_np.asarray(obs, _np.float32),
+                              nan=0.0, posinf=1e3, neginf=-1e3)
+
+    def reset(self, **kw):
+        return self._clean(self.env.reset(**kw))
+    def step(self, action):
+        o, r, d, i = self.env.step(action)
+        return self._clean(o), float(r), bool(d), i
+
+
+def _wrap_env_with_sanitizer(env):
+    # sehr konservative Clips:
+    # - image: [0,1]
+    # - robot_observation/observation: [-1e3, 1e3]
+    clip_cfg = {
+        'image': (0.0, 1.0),
+        'robot_observation': (-1e3, 1e3),
+        'observation': (-1e3, 1e3),
+        'achieved_goal': (-1e3, 1e3),
+        'desired_goal': (-1e3, 1e3),
+    }
+    return SanitizeObsWrapper(env, clip_dict=clip_cfg)
+
+
+class LenientKeyPathCollector(data_collector.KeyPathCollector):
+    """
+    Ein KeyPathCollector, der für den GUI-Modus angepasst ist.
+    1. Er ignoriert unerwartete Keyword-Argumente in `collect_new_paths`.
+    2. Er stellt sicher, dass die Beobachtungsdaten (obs, goal, etc.) zu einem
+       einzigen Vektor zusammengefügt werden, wie es die Policy erwartet.
+    """
+    def __init__(
+            self,
+            env,
+            policy,
+            observation_key='observation',
+            desired_goal_key='desired_goal',
+            **kwargs
+    ):
+        # Filtere unerwartete kwargs heraus, die nur für VectorizedKeyPathCollector sind
+        import inspect
+        parent_init_spec = inspect.getfullargspec(super().__init__)
+        accepted_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in parent_init_spec.args or k in parent_init_spec.kwonlyargs
+        }
+        super().__init__(
+            env,
+            policy,
+            observation_key=observation_key,
+            desired_goal_key=desired_goal_key,
+            **accepted_kwargs
+        )
+
+    def _get_action_and_info(self, observation):
+        """
+        Nimmt das Beobachtungs-Dictionary, fügt die Teile zu einem einzigen
+        Vektor zusammen und holt dann die Aktion von der Policy.
+        """
+        # Baue den flachen Beobachtungsvektor so zusammen, wie es die Policy erwartet.
+        # Die Reihenfolge ist entscheidend und muss mit der Konfiguration in
+        # `get_keys_and_dims` übereinstimmen.
+        obs = np.hstack([
+            observation[key] for key in self._observation_key
+        ])
+        return self.policy.get_action(obs)
+
+    def collect_new_paths(self, max_path_length, num_steps, discard_incomplete_paths, **kwargs):
+        # Ignoriere die zusätzlichen kwargs und rufe die Elternmethode auf.
+        return super().collect_new_paths(
+            max_path_length=max_path_length,
+            num_steps=num_steps,
+            discard_incomplete_paths=discard_incomplete_paths,
+        )
 
 
 def experiment(variant):
@@ -75,11 +212,21 @@ def experiment(variant):
     runlog = RunLogger(root=run_log_dir, project="dynamic-cloth-folding")
 
     env_kwargs = dict(variant['env_kwargs'])
+    if BACKEND == 'bullet' and os.getenv('WITH_GUI', '0') == '1':
+        env_kwargs['has_viewer'] = True
     env_kwargs['logger'] = runlog
-    eval_env = cloth_env.ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
+    eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
+    print("PHYSICS backend:", getattr(eval_env, "_backend_name", "unknown"),
+          "| class:", type(eval_env).__name__)
 
-    randomized_eval_env = general_utils.get_randomized_env(
-        wrappers.NormalizedBoxEnv(eval_env), randomization_kwargs=variant['randomization_kwargs'])
+    # Sanitize → Normalize → Sanitize (Post)
+    eval_env = _wrap_env_with_sanitizer(eval_env)
+    eval_env = wrappers.NormalizedBoxEnv(eval_env)
+    eval_env = PostNormalizeSanitizer(eval_env)
+
+    randomized_eval_env = _maybe_randomize(
+        eval_env, randomization_kwargs=variant['randomization_kwargs']
+    )
 
     env_keys, env_dims = general_utils.get_keys_and_dims(
         variant, randomized_eval_env)
@@ -137,28 +284,48 @@ def experiment(variant):
         tests=[success_test, real_corner_test])
 
     # --- Worker-Env-Fabrik: Jeder Subprozess bekommt seinen eigenen RunLogger ---
-    def make_worker_env_function():
-        def _fn():
-            from df_logging import RunLogger
-            envkw = dict(variant['env_kwargs'])
-            envkw['logger'] = RunLogger(root=run_log_dir, project="dynamic-cloth-folding")
-            base_env = cloth_env.ClothEnv(**envkw, randomization_kwargs=variant['randomization_kwargs'])
-            wrapped = wrappers.NormalizedBoxEnv(base_env)
-            return general_utils.get_randomized_env(wrapped, randomization_kwargs=variant['randomization_kwargs'])
-        return _fn
+    # ABER: Wenn GUI an ist, wollen wir die Exploration im Hauptprozess sehen.
+    # Dann verwenden wir einen KeyPathCollector mit der eval_env.
+    if os.getenv('WITH_GUI', '0') == '1':
+        # Verwende den toleranten Collector, der unerwartete Argumente ignoriert
+        # und die path_collector_kwargs aus der Variante übernimmt.
+        exploration_path_collector = LenientKeyPathCollector(
+            randomized_eval_env,
+            policy,
+            observation_key=env_keys['path_collector_observation_key'],
+            desired_goal_key=env_keys['desired_goal_key'],
+            **variant['path_collector_kwargs'],
+        )
+        # vec_env wird dann nicht gebraucht
+        vec_env = None
+    else:
+        def make_worker_env_function():
+            def _fn():
+                from df_logging import RunLogger
+                envkw = dict(variant['env_kwargs'])
+                envkw['logger'] = RunLogger(root=run_log_dir, project="dynamic-cloth-folding")
+                base_env = ClothEnv(**envkw, randomization_kwargs=variant['randomization_kwargs'])
+                print("[worker] backend:", getattr(base_env, "_backend_name", "unknown"), "| class:", type(base_env).__name__)
 
-    env_functions = [make_worker_env_function() for _ in range(
-        variant['path_collector_kwargs']['num_processes'])]
-    vec_env = wrappers.SubprocVecEnv(env_functions)
-    # ---------------------------------------------------------------------------
+                base_env = _wrap_env_with_sanitizer(base_env)
+                base_env = wrappers.NormalizedBoxEnv(base_env)
+                base_env = PostNormalizeSanitizer(base_env)
 
-    exploration_path_collector = data_collector.VectorizedKeyPathCollector(
-        vec_env,
-        policy,
-        observation_key=env_keys['path_collector_observation_key'],
-        desired_goal_key=env_keys['desired_goal_key'],
-        **variant['path_collector_kwargs'],
-    )
+                return _maybe_randomize(base_env, randomization_kwargs=variant['randomization_kwargs'])
+            return _fn
+
+        env_functions = [make_worker_env_function() for _ in range(
+            variant['path_collector_kwargs']['num_processes'])]
+        vec_env = wrappers.SubprocVecEnv(env_functions)
+        # ---------------------------------------------------------------------------
+
+        exploration_path_collector = data_collector.VectorizedKeyPathCollector(
+            vec_env,
+            policy,
+            observation_key=env_keys['path_collector_observation_key'],
+            desired_goal_key=env_keys['desired_goal_key'],
+            **variant['path_collector_kwargs'],
+        )
 
     replay_buffer = future_obs_dict_replay_buffer.FutureObsDictRelabelingBuffer(
         ob_spaces=copy.deepcopy(eval_env.observation_space.spaces),
@@ -169,18 +336,6 @@ def experiment(variant):
         achieved_goal_key=env_keys['achieved_goal_key'],
         **variant['replay_buffer_kwargs']
     )
-
-    trainer = sac.SACTrainer(
-        policy_target_entropy=-np.prod(
-            eval_env.action_space.shape).item(),
-        policy=policy,
-        qf1=qf1,
-        qf2=qf2,
-        target_qf1=target_qf1,
-        target_qf2=target_qf2,
-        **variant['trainer_kwargs']
-    )
-    trainer = her.ClothSacHERTrainer(trainer)
 
     # --- Patch: num train calls sauber durchreichen ---
     base_trainer = sac.SACTrainer(
@@ -218,12 +373,21 @@ def experiment(variant):
     )
     algorithm.to(pytorch_util.device)
 
-    with mujoco_py.ignore_mujoco_warnings():
-        algorithm.train()
+    algorithm.train()
 
-    vec_env.close()
+    if vec_env:
+        vec_env.close()
     pylog.debug("Closed subprocesses")
     return
+
+
+def _debug_rollout(env, policy, steps=200):
+    o = env.reset()
+    for t in range(steps):
+        # deterministische Policy für Sichtprüfung
+        a = policy.get_action(o)[0] if hasattr(policy, "get_action") else env.action_space.sample()
+        o, r, d, _ = env.step(a)
+        if d: o = env.reset()
 
 
 if __name__ == "__main__":
