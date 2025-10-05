@@ -202,6 +202,16 @@ class BulletClothEnv_(object):
     def _build_world(self):
         p.loadURDF("plane.urdf")
         self._table_z = 0.0
+
+        # Tisch/Box hinzufügen
+        table_half_extents = [0.4, 0.4, 0.02]
+        table_pos = [0.5, 0.0, table_half_extents[2]]
+        box_collision_shape_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=table_half_extents)
+        box_visual_shape_id = p.createVisualShape(p.GEOM_BOX, halfExtents=table_half_extents, rgbaColor=[0.8, 0.8, 0.8, 1])
+        self.table_id = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=box_collision_shape_id,
+                                          baseVisualShapeIndex=box_visual_shape_id, basePosition=table_pos)
+        self._table_z = table_pos[2] + table_half_extents[2]  # Oberkante des Tisches
+
         self.robot_id = p.loadURDF("franka_panda/panda.urdf", [0, 0, 0], useFixedBase=True)
 
         # Gelenke & EE
