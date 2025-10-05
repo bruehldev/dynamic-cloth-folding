@@ -36,6 +36,27 @@ def _compute_cosine_distance(a, b):
     return float(np.dot(a, b) / denom)
 
 
+# +++ HINZUGEFÜGT: Definition der Constraint-Klasse +++
+class Constraint:
+    def __init__(self, site1, site2, distance, noise_directions=None):
+        self.site1 = site1
+        self.site2 = site2
+        self.distance = distance
+        self.noise_directions = noise_directions
+
+    def get_achieved_goal(self, cloth_site_positions):
+        return cloth_site_positions[self.site1]
+
+    def get_desired_goal(self, cloth_site_positions, noise):
+        direction = cloth_site_positions[self.site2] - cloth_site_positions[self.site1]
+        if self.noise_directions is not None:
+            direction *= np.array(self.noise_directions)
+        return cloth_site_positions[self.site1] + direction * noise
+
+    def get_distance(self, cloth_site_positions):
+        return np.linalg.norm(cloth_site_positions[self.site1] - cloth_site_positions[self.site2])
+
+
 class BulletClothEnv_(object):
     """
     PyBullet-Port mit identischer Außen-API zu ClothEnv (MuJoCo):
@@ -132,10 +153,16 @@ class BulletClothEnv_(object):
         self.action_space = gym.spaces.Box(-1, 1, shape=(3,), dtype=np.float32)
         self._build_cloth_sites()
 
-        # Reward / Tasks
-        self.constraints = _task_definitions.constraints["sideways"](0, 4, 8, self.success_distance)
+        # +++ GEÄNDERT: Reward / Tasks +++
+        constraint_infos = _task_definitions.constraints["sideways"](0, 4, 8, self.success_distance)
+        self.constraints = [Constraint(
+            site1=info['origin'],
+            site2=info['target'],
+            distance=info['distance'],
+            noise_directions=info.get('noise_directions')
+        ) for info in constraint_infos]
         self.task_reward_function = _reward_calculation.get_task_reward_function(
-            self.constraints, self.single_goal_dim, self.sparse_dense,
+            constraint_infos, self.single_goal_dim, self.sparse_dense,
             self.success_reward, self.fail_reward, self.extra_reward
         )
 
@@ -157,6 +184,10 @@ class BulletClothEnv_(object):
             robot_observation=gym.spaces.Box(-np.inf, np.inf, shape=obs['robot_observation'].shape, dtype=np.float32),
             image=gym.spaces.Box(-np.inf, np.inf, shape=obs['image'].shape, dtype=np.float32),
         ))
+        # optional: Ziel/EE ausgeben
+        self._print_targets = os.getenv("PRINT_TARGET", "0") == "1"
+        self._print_every = int(os.getenv("PRINT_EVERY", "10"))
+
 
     # ------------------- Bullet world -------------------
     def _connect_bullet(self):
@@ -197,6 +228,9 @@ class BulletClothEnv_(object):
             self.joint_upper_limits.append(hi if hi <  1e10 else  3.14)
             self.joint_max_forces.append(200.0)
 
+        self.joint_ranges = [u - l for u, l in zip(self.joint_upper_limits, self.joint_lower_limits)]
+        self.joint_rest_poses = [0.0] * len(self.arm_joint_indices)
+
         # neutrale Startpose & Dämpfung
         for j in self.arm_joint_indices:
             p.resetJointState(self.robot_id, j, 0.0, 0.0)
@@ -210,6 +244,8 @@ class BulletClothEnv_(object):
     def _build_cloth_sites(self):
         cloth_size = float(self.randomization_kwargs.get('cloth_size', 0.24))
         grid_n = 9
+        self._grid_n = grid_n
+        self._grid_mid = grid_n // 2  # = 4
         half = cloth_size / 2.0
         xs = np.linspace(-half, half, grid_n)
         ys = np.linspace(-half, half, grid_n)
@@ -220,10 +256,8 @@ class BulletClothEnv_(object):
         self.cloth_site_names = []
         for i, xv in enumerate(xs):
             for j, yv in enumerate(ys):
-                name = f"S{i}_{j}"
-                self._cloth_sites_W[name] = np.array([0.6 + xv, yv, z])
-                if i in (0, 4, grid_n-1) and j in (0, 4, grid_n-1):
-                    self.cloth_site_names.append(name)
+                self._cloth_sites_W[f"S{i}_{j}"] = np.array([xv, yv, z])
+                self.cloth_site_names.append(f"S{i}_{j}")
         self.mid_corner_index = 4
         self.max_corner_name = f"S{grid_n-1}_{grid_n-1}"
 
@@ -255,6 +289,10 @@ class BulletClothEnv_(object):
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
+        # optional: Ziel/EE ausgeben
+        if self._print_targets:
+            print(f"[RESET] goal_I={self.goal.round(3)}")
+        
         return self.get_obs()
 
     # ------------------- sensors -------------------
@@ -288,17 +326,72 @@ class BulletClothEnv_(object):
 
     # ------------------- camera -------------------
     def _camera_params(self):
-        target = np.array([0.6, 0.0, self._table_z])
-        eye = target + np.array([0.0, 0.0, 0.8])
-        up = [0, 1, 0]
+        """
+        MuJoCo-Parität:
+        - Lookat = Cloth-Mitte (S4_4)
+        - FOV = mean(camera_config['fovy_range'])
+        - Eye-Offset abhängig von camera_type ∈ {side, front, up}
+        - Optional feinjustierbar via ENV (CAM_*), ohne Codeänderung
+        """
+        cam_cfg = self.randomization_kwargs.get("camera_config", {}) or {}
+        w = int(cam_cfg.get("width", self._cam_w))
+        h = int(cam_cfg.get("height", self._cam_h))
+        self._cam_w, self._cam_h = w, h
+
+        fovy_range = cam_cfg.get("fovy_range", [60.0, 60.0])
+        fov = float((float(fovy_range[0]) + float(fovy_range[1])) * 0.5)
+        self._cam_fov = fov  # 1:1 zu MuJoCo: fov aus Model/Config übernehmen
+
+        # Lookat = Center des Cloth-Grids (S4_4), wie MuJoCo reset_camera() B4_4
+        center = self._get_cloth_center_W()
+
+        # Eye-Offset aus camera_type ableiten (tweakbar via ENV)
+        cam_type = str(self.randomization_kwargs.get("camera_type", "side")).lower()
+        eye = self._camera_eye_from_type(center, cam_type)
+
+        up = [0.0, 1.0, 0.0]
         aspect = float(self._cam_w) / float(self._cam_h)
-        view = p.computeViewMatrix(eye, target, up)
+        view = p.computeViewMatrix(eye, center.tolist(), up)
         proj = p.computeProjectionMatrixFOV(self._cam_fov, aspect, 0.01, 2.0)
         return view, proj
 
+
+    def _get_cloth_center_W(self):
+        """Weltkoordinate des Grid-Mittelpunkts S4_4 (MuJoCo nutzt B4_4 als Lookat)."""
+        name = f"S{self._grid_mid}_{self._grid_mid}"
+        return self._cloth_sites_W[name].copy()
+
+
+    def _camera_eye_from_type(self, center, cam_type):
+        """
+        Eye = center + Offset; Defaults so gewählt, dass der Ausschnitt MuJoCo ähnlich ist.
+        Über ENV kann man live feintunen (Meter):
+        CAM_SIDE_DX/DY/DZ, CAM_FRONT_DX/DY/DZ, CAM_UP_DZ etc.
+        """
+        import os
+        # sinnvolle Defaults (Meter)
+        if cam_type == "side":
+            dx = float(os.getenv("CAM_SIDE_DX", "-0.55"))
+            dy = float(os.getenv("CAM_SIDE_DY", "0.00"))
+            dz = float(os.getenv("CAM_SIDE_DZ", "0.30"))
+        elif cam_type == "front":
+            dx = float(os.getenv("CAM_FRONT_DX", "0.00"))
+            dy = float(os.getenv("CAM_FRONT_DY", "-0.65"))
+            dz = float(os.getenv("CAM_FRONT_DZ", "0.30"))
+        elif cam_type == "up":
+            dx = float(os.getenv("CAM_UP_DX", "0.00"))
+            dy = float(os.getenv("CAM_UP_DY", "0.00"))
+            dz = float(os.getenv("CAM_UP_DZ", "0.80"))
+        else:
+            # Fallback wie vorher: direkt von oben
+            dx = 0.0; dy = 0.0; dz = 0.80
+
+        eye = center + np.array([dx, dy, dz], dtype=np.float32)
+        return eye.tolist()
+
     def get_image_obs(self):
-        import cv2
-        W, H = self._cam_w, self._cam_h
+        # sicherstellen, dass die Kamera-Parameter aktuell sind
+        W, H = self.image_size
         view, proj = self._camera_params()
         _, _, rgba, _, _ = p.getCameraImage(W, H, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
         img = np.reshape(rgba, (H, W, 4))[:, :, :3].astype("uint8")
@@ -311,7 +404,7 @@ class BulletClothEnv_(object):
         img = img[h0:h0 + self.image_size[1], w0:w0 + self.image_size[0], :]
 
         try:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            img = self.albumentations_transform(image=img)["image"]
         except Exception:
             pass
 
@@ -325,14 +418,10 @@ class BulletClothEnv_(object):
         goal = np.zeros(self.single_goal_dim * len(self.constraints), dtype=np.float32)
         noise = self.np_random.uniform(self.goal_noise_range[0], self.goal_noise_range[1])
         for i, constraint in enumerate(self.constraints):
-            target = constraint['target']
-            target_pos = self.get_cloth_position_W()[target].copy()
-            offset = np.zeros(self.single_goal_dim, dtype=np.float32)
-            if 'noise_directions' in constraint:
-                for idx, offset_dir in enumerate(constraint['noise_directions']):
-                    offset[idx] = offset_dir * noise
-            goal[i*self.single_goal_dim:(i+1)*self.single_goal_dim] = target_pos + offset - self.relative_origin
-        return goal.copy(), noise
+            goal[i * self.single_goal_dim:(i + 1) * self.single_goal_dim] = \
+                (constraint.get_desired_goal(
+                    self.get_cloth_position_I(), noise)).flatten()
+        return goal, noise
 
     def compute_task_reward(self, achieved_goal, desired_goal, info):
         return self.task_reward_function(achieved_goal, desired_goal, info)
@@ -341,9 +430,8 @@ class BulletClothEnv_(object):
     def get_obs(self):
         achieved_goal_I = np.zeros(self.single_goal_dim * len(self.constraints), dtype=np.float32)
         for i, constraint in enumerate(self.constraints):
-            origin = constraint['origin']
-            p_W = self.get_cloth_position_W()[origin].copy()
-            achieved_goal_I[i*self.single_goal_dim:(i+1)*self.single_goal_dim] = (p_W - self.relative_origin).astype(np.float32)
+            achieved_goal_I[i * self.single_goal_dim:(i + 1) * self.single_goal_dim] = \
+                constraint.get_achieved_goal(self.get_cloth_position_I())
 
         cloth_position = np.array(list(self.get_cloth_position_I().values()), dtype=np.float32)
         cloth_velocity = np.array(list(self.get_cloth_velocity().values()), dtype=np.float32)
@@ -351,14 +439,13 @@ class BulletClothEnv_(object):
 
         desired_pos_ctrl_I = (self.desired_pos_ctrl_W - self.relative_origin).astype(np.float32)
         if self.robot_observation == "ee":
-            robot_observation = np.concatenate([self.get_ee_position_I().astype(np.float32),
-                                                self.get_ee_velocity().astype(np.float32),
-                                                desired_pos_ctrl_I]).astype(np.float32)
+            robot_observation = np.concatenate(
+                [self.get_ee_position_I(), self.get_ee_velocity()]).astype(np.float32)
         elif self.robot_observation == "ctrl":
-            robot_observation = np.concatenate([self.previous_raw_action.astype(np.float32),
-                                                np.zeros(6, dtype=np.float32)]).astype(np.float32)
+            robot_observation = np.concatenate(
+                [desired_pos_ctrl_I, self.get_ee_velocity()]).astype(np.float32)
         else:
-            robot_observation = np.zeros(9, dtype=np.float32)
+            raise ValueError(f"unknown robot obs: {self.robot_observation}")
 
         image_stack = np.array([img for img in self.frame_stack], dtype=np.float32).flatten()
 
@@ -409,53 +496,43 @@ class BulletClothEnv_(object):
         self.current_step = getattr(self, "current_step", 0)
 
         for i in range(self.substeps):
-            # low-pass
-            self.desired_pos_ctrl_W = self.filter * self.desired_pos_step_W + (1 - self.filter) * self.desired_pos_ctrl_W
-
-            # (optional) Linie EE -> Ziel
-            if self._pb_gui:
-                p.addUserDebugLine(self.get_ee_position_W(),
-                                   self.desired_pos_ctrl_W, [1, 0, 0], 2, lifeTime=0.1)
-
-            # IK
-            cur = p.getLinkState(self.robot_id, self.ee_link_index)
-            target_orn = cur[5]
-            q_full = p.calculateInverseKinematics(
-                self.robot_id, self.ee_link_index,
-                self.desired_pos_ctrl_W.tolist(), target_orn,
+            # OSC-Regler
+            alpha = (i + 1) / self.substeps
+            self.desired_pos_ctrl_W = (1 - alpha) * previous_desired_pos_step_W + alpha * self.desired_pos_step_W
+            
+            # IK-Ziel für KUKA
+            joint_positions = p.calculateInverseKinematics(
+                self.robot_id,
+                self.ee_link_index,
+                x_target,
                 lowerLimits=self.joint_lower_limits,
                 upperLimits=self.joint_upper_limits,
-                jointRanges=[(u - l) for (l, u) in zip(self.joint_lower_limits, self.joint_upper_limits)],
-                restPoses=[p.getJointState(self.robot_id, j)[0] for j in self.arm_joint_indices],
-                maxNumIterations=100, residualThreshold=1e-4
+                jointRanges=self.joint_ranges,
+                restPoses=self.joint_rest_poses,
             )
-            qpos = list(q_full[:len(self.arm_joint_indices)])
-            # clamp
-            for k, (lo, hi) in enumerate(zip(self.joint_lower_limits, self.joint_upper_limits)):
-                qpos[k] = min(max(qpos[k], lo), hi)
 
-            # kräftig antreiben (robust per joint)
-            for j, q in zip(self.arm_joint_indices, qpos):
-                p.setJointMotorControl2(self.robot_id, j, p.POSITION_CONTROL,
-                                        targetPosition=float(q),
-                                        positionGain=0.8, velocityGain=1.0, force=200.0)
+            # Gelenk-Steuerung
+            p.setJointMotorControlArray(
+                self.robot_id,
+                self.arm_joint_indices,
+                p.POSITION_CONTROL,
+                targetPositions=joint_positions,
+                forces=self.joint_max_forces,
+            )
 
-            # mehrere Integrationsschritte
-            for _ in range(5):
-                p.stepSimulation()
+            # Physik-Schritt
+            p.stepSimulation()
 
-            if i in (0, int(self.substeps / 2), int(self.substeps - 1)):
-                ctrl_samples.append({
-                    "idx": int(i + 1),
-                    "x_des": self.desired_pos_ctrl_W.tolist(),
-                    "q": self.get_joint_positions().tolist(),
-                    "dq": self.get_joint_velocities().tolist(),
-                    "x_ee": self.get_ee_position_W().tolist(),
-                })
-
+            # Bild-Beobachtung (nur in einem Sub-Schritt)
             if i == image_obs_substep_idx:
                 image_obs = self.get_image_obs()
                 self.frame_stack.append(image_obs)
+
+            # Debug-Zeug
+            if self._pb_gui:
+                p.addUserDebugLine(previous_desired_pos_step_W, self.desired_pos_step_W, [1,0,0], 2, 0.1)
+                ee_pos = self.get_ee_position_W()
+                ctrl_samples.append(ee_pos)
 
         obs = self.get_obs()
         reward, done, info = self.post_action(obs, raw_action, cosine_distance)
@@ -471,9 +548,20 @@ class BulletClothEnv_(object):
 
         # harte NaN-Wache
         for k in ('image', 'observation', 'robot_observation', 'achieved_goal', 'desired_goal'):
-            arr = np.asarray(obs[k])
-            if not np.all(np.isfinite(arr)):
-                raise RuntimeError(f"NaN/Inf detected in obs['{k}'] at step {self.current_step}")
+            if np.any(np.isnan(obs[k])):
+                raise ValueError(f"NaN in obs['{k}'] detected!")
+
+        # für Logs/Debug auch ins info packen
+        info['ee_target_W'] = self.desired_pos_ctrl_W.copy()
+        info['ee_target_step_W'] = self.desired_pos_step_W.copy()
+        info['ee_W'] = self.get_ee_position_W().copy()
+
+        # optional: Ziel/EE ausgeben
+        if self._print_targets and (self.current_step % self._print_every == 0):
+            print(f"[{self.current_step:03d}] "
+                  f"ee_I={self.get_ee_position_I().round(3)}, "
+                  f"tgt_I={(self.desired_pos_step_W - self.relative_origin).round(3)}, "
+                  f"goal_I={self.goal.round(3)}")
 
         return obs, reward, done, info
 
@@ -482,10 +570,9 @@ class BulletClothEnv_(object):
         inv = {v: k for k, v in self.corner_index_mapping.items()}
         distances = {"0": 0, "1": 0, "2": 0, "3": 0}
         for i, c in enumerate(self.constraints):
-            if c['origin'] in inv:
-                origin_pos = self.get_cloth_position_W()[c['origin']].copy() - self.relative_origin
-                target_pos = self.goal[i*self.single_goal_dim:(i+1)*self.single_goal_dim]
-                distances[inv[c['origin']]] = float(np.linalg.norm(origin_pos - target_pos))
+            if c.site1 in inv:
+                dist = c.get_distance(self.get_cloth_position_I())
+                distances[inv[c.site1]] = dist
         return distances
 
     def post_action(self, obs, raw_action, cosine_distance):
