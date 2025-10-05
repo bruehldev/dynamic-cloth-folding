@@ -95,6 +95,12 @@ class BulletClothEnv_(object):
 
         self._backend_name = "pybullet"
         self.logger = logger
+
+        # UI/Rendering Flags (über Env steuerbar)
+        show_full_ui = os.getenv("SHOW_FULL_UI", "0") == "1"   # zeigt komplette PyBullet-Oberfläche
+        self._hide_gui_chrome = not show_full_ui               # Statusleisten/Sliders etc. ausblenden?
+        self._hide_previews  = not show_full_ui                # RGB/Depth/Seg-Previews ausblenden?
+
         # GUI nur im Hauptprozess und nur wenn explizit via Env-Var WITH_GUI=1 angefordert.
         # Diese Env-Var hat Vorrang vor der `has_viewer`-Einstellung in der Config.
         self._pb_gui = os.getenv("WITH_GUI", "0") == "1" and current_process().name == "MainProcess"
@@ -201,11 +207,24 @@ class BulletClothEnv_(object):
     def _connect_bullet(self):
         if self._pb_gui:
             p.connect(p.GUI)
+            if self._hide_gui_chrome:
+                p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+            if self._hide_previews:
+                p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
+                p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
+                p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
         else:
             p.connect(p.DIRECT)
         # Nur verbinden, keine Simulation hier aufsetzen
 
     def _build_world(self):
+        # Hide rebuild flicker (giant cloth flash) during reset
+        _render_was_on = False
+        if self._pb_gui:
+            _render_was_on = True
+            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
+            p.removeAllUserDebugItems()
+
         p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
         self._setup_simulation()
 
@@ -248,6 +267,9 @@ class BulletClothEnv_(object):
         # Let the cloth settle to prevent the initial "explosion" flicker
         for _ in range(60):
             p.stepSimulation()
+
+        # +++ HINZUGEFÜGT: Statisches Kameraziel nach dem Settling speichern +++
+        self._fixed_camera_target = self._get_cloth_center_W()
 
         # cache current verts for our velocity estimate (see step 2)
         mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
@@ -295,6 +317,14 @@ class BulletClothEnv_(object):
         self._compute_cloth_sites(n=9)
         # Identifiziere die Eck-Vertices nach dem Erstellen des Tuchs
         self._build_cloth_sites()
+
+        # Set a stable debug camera and re-enable rendering
+        if self._pb_gui and _render_was_on:
+            center = self._get_cloth_center_W()
+            cam_type = str(self.randomization_kwargs.get("camera_type", "side")).lower()
+            eye, _ = self._camera_eye_from_type(center, cam_type)  # <-- unpack tuple
+            self._set_debug_camera_from_eye(center, eye)  # <-- pass only eye
+            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
 
     def _build_cloth_sites(self):
         # Diese Methode ist jetzt für die Identifizierung der Eck-Vertices zuständig
@@ -424,7 +454,7 @@ class BulletClothEnv_(object):
         return {f"v_{i}": vels[i] for i in range(len(vels))}
 
     # ------------------- camera -------------------
-    def _camera_params(self):
+    def _camera_params(self, w=None, h=None):
         """
         MuJoCo-Parität:
         - Lookat = Cloth-Mitte (S4_4)
@@ -433,26 +463,51 @@ class BulletClothEnv_(object):
         - Optional feinjustierbar via ENV (CAM_*), ohne Codeänderung
         """
         cam_cfg = self.randomization_kwargs.get("camera_config", {}) or {}
-        w = int(cam_cfg.get("width", self._cam_w))
-        h = int(cam_cfg.get("height", self._cam_h))
-        self._cam_w, self._cam_h = w, h
+        if w is None or h is None:
+            w = int(cam_cfg.get("width", self._cam_w))
+            h = int(cam_cfg.get("height", self._cam_h))
+        self._cam_w, self._cam_h = int(w), int(h)
 
         fovy_range = cam_cfg.get("fovy_range", [60.0, 60.0])
         fov = float((float(fovy_range[0]) + float(fovy_range[1])) * 0.5)
         self._cam_fov = fov  # 1:1 zu MuJoCo: fov aus Model/Config übernehmen
 
         # Lookat = Center des Cloth-Grids (S4_4), wie MuJoCo reset_camera() B4_4
-        center = self._get_cloth_center_W()
+        # GEÄNDERT: Statisches Ziel verwenden, damit die Kamera nicht dem Tuch folgt
+        center = getattr(self, "_fixed_camera_target", self._get_cloth_center_W())
 
         # Eye-Offset aus camera_type ableiten (tweakbar via ENV)
-        cam_type = str(self.randomization_kwargs.get("camera_type", "side")).lower()
-        eye = self._camera_eye_from_type(center, cam_type)
+        cam_type = os.getenv("CAM_TYPE", str(self.randomization_kwargs.get("camera_type", "side"))).lower()
+        eye, up = self._camera_eye_from_type(center, cam_type)
 
-        up = [0.0, 1.0, 0.0]
-        aspect = float(self._cam_w) / float(self._cam_h)
+        aspect = float(self._cam_w) / max(1.0, float(self._cam_h))
         view = p.computeViewMatrix(eye, center.tolist(), up)
         proj = p.computeProjectionMatrixFOV(self._cam_fov, aspect, 0.01, 2.0)
         return view, proj
+    
+    def _set_debug_camera_from_eye(self, center, eye):
+        """
+        Convert (eye, center) into Bullet's (dist, yaw, pitch) and set the GUI camera.
+        Env overrides:
+        CAM_YAW, CAM_PITCH, CAM_DIST  (degrees / meters)
+        """
+        import numpy as np, os
+        cam_vec = np.array(eye, dtype=np.float32) - np.array(center, dtype=np.float32)  # <-- eye - center
+        dist = float(np.linalg.norm(cam_vec) or 0.5)
+        # yaw around +Z, pitch negative when looking down from above
+        yaw = float(np.degrees(np.arctan2(cam_vec[1], cam_vec[0])))
+        pitch = float(-np.degrees(np.arctan2(cam_vec[2], np.linalg.norm(cam_vec[:2]) + 1e-9)))
+
+        # allow manual tweaks
+        yaw   = float(os.getenv("CAM_YAW",   yaw))
+        pitch = float(os.getenv("CAM_PITCH", pitch))
+        dist  = float(os.getenv("CAM_DIST",  dist))
+
+        # keep pitch in a sane range
+        pitch = max(-89.0, min(89.0, pitch))
+
+        p.resetDebugVisualizerCamera(dist, yaw, pitch, center.tolist())
+
 
 
     def _get_cloth_center_W(self):
@@ -467,9 +522,11 @@ class BulletClothEnv_(object):
         Eye = center + Offset; Defaults so gewählt, dass der Ausschnitt MuJoCo ähnlich ist.
         Über ENV kann man live feintunen (Meter):
         CAM_SIDE_DX/DY/DZ, CAM_FRONT_DX/DY/DZ, CAM_UP_DZ etc.
+        Returns:
+            tuple: (eye_position_list, up_vector_list)
         """
-        import os
-        # sinnvolle Defaults (Meter)
+        up = [0.0, 1.0, 0.0]  # Standard "up" vector
+
         if cam_type == "side":
             dx = float(os.getenv("CAM_SIDE_DX", "-0.55"))
             dy = float(os.getenv("CAM_SIDE_DY", "0.00"))
@@ -482,17 +539,32 @@ class BulletClothEnv_(object):
             dx = float(os.getenv("CAM_UP_DX", "0.00"))
             dy = float(os.getenv("CAM_UP_DY", "0.00"))
             dz = float(os.getenv("CAM_UP_DZ", "0.80"))
+        elif cam_type == "diag":
+            dx = float(os.getenv("CAM_DIAG_DX", "1.0"))
+            dy = float(os.getenv("CAM_DIAG_DY", "1.0"))
+            dz = float(os.getenv("CAM_DIAG_DZ", "1.0"))
+            up = [0.0, 0.0, 1.0]  # Ändere den "up" Vektor, um die Kamera schräg von oben zu halten
+        elif cam_type == "diag_portrait":
+            # Wie "diag", aber um 90 Grad gedreht ("Hochformat")
+            dx = float(os.getenv("CAM_DIAG_DX", "0.4"))
+            dy = float(os.getenv("CAM_DIAG_DY", "0.4"))
+            dz = float(os.getenv("CAM_DIAG_DZ", "0.4"))
+            up = [-1.0, 0.0, 0.0]  # Ändere den "up" Vektor, um die Kamera um 90 Grad zu drehen
+        elif cam_type == "side_far":
+            dx = float(os.getenv("CAM_SIDE_FAR_DX", "-0.7"))
+            dy = float(os.getenv("CAM_SIDE_FAR_DY", "0.0"))
+            dz = float(os.getenv("CAM_SIDE_FAR_DZ", "0.4"))
         else:
             # Fallback wie vorher: direkt von oben
             dx = 0.0; dy = 0.0; dz = 0.80
 
         eye = center + np.array([dx, dy, dz], dtype=np.float32)
-        return eye.tolist()
+        return eye.tolist(), up
 
     def get_image_obs(self):
         # sicherstellen, dass die Kamera-Parameter aktuell sind
         W, H = self.image_size
-        view, proj = self._camera_params()
+        view, proj = self._camera_params(W, H)
         _, _, rgba, _, _ = p.getCameraImage(W, H, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
         img = np.reshape(rgba, (H, W, 4))[:, :, :3].astype("uint8")
 
