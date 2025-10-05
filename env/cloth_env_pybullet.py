@@ -93,7 +93,6 @@ class BulletClothEnv_(object):
         if p is None:
             raise ImportError(f"pybullet not available: {_IMPORT_ERR}")
 
-        # --- who am I?
         self._backend_name = "pybullet"
         self.logger = logger
         # GUI nur im Hauptprozess und nur wenn explizit via Env-Var WITH_GUI=1 angefordert.
@@ -203,7 +202,7 @@ class BulletClothEnv_(object):
     def _build_world(self):
         p.loadURDF("plane.urdf")
         self._table_z = 0.0
-        self.robot_id = p.loadURDF("kuka_iiwa/model.urdf", [0, 0, 0], useFixedBase=True)
+        self.robot_id = p.loadURDF("franka_panda/panda.urdf", [0, 0, 0], useFixedBase=True)
 
         # Gelenke & EE
         self.arm_joint_indices = []
@@ -213,10 +212,11 @@ class BulletClothEnv_(object):
             if ji[2] == p.JOINT_REVOLUTE:
                 self.arm_joint_indices.append(j)
             name = ji[12].decode() if isinstance(ji[12], (bytes, bytearray)) else str(ji[12])
-            if name.endswith("link_7"):
+            if name == "panda_hand":
                 self.ee_link_index = j
         if self.ee_link_index is None and self.arm_joint_indices:
-            self.ee_link_index = self.arm_joint_indices[-1]
+            # Fallback to the last link of the arm if 'panda_hand' is not found
+            self.ee_link_index = self.arm_joint_indices[-1] + 1
 
         # Limits/Gains/Forces
         self.joint_lower_limits, self.joint_upper_limits = [], []
@@ -500,7 +500,7 @@ class BulletClothEnv_(object):
             alpha = (i + 1) / self.substeps
             self.desired_pos_ctrl_W = (1 - alpha) * previous_desired_pos_step_W + alpha * self.desired_pos_step_W
             
-            # IK-Ziel für KUKA
+            # IK-Ziel für Panda
             joint_positions = p.calculateInverseKinematics(
                 self.robot_id,
                 self.ee_link_index,
@@ -511,13 +511,13 @@ class BulletClothEnv_(object):
                 restPoses=self.joint_rest_poses,
             )
 
-            # Gelenk-Steuerung
+            # Gelenk-Steuerung (nur für die 7 Arm-Gelenke)
             p.setJointMotorControlArray(
                 self.robot_id,
-                self.arm_joint_indices,
+                self.arm_joint_indices[:7],
                 p.POSITION_CONTROL,
-                targetPositions=joint_positions,
-                forces=self.joint_max_forces,
+                targetPositions=joint_positions[:7],
+                forces=self.joint_max_forces[:7],
             )
 
             # Physik-Schritt
