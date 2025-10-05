@@ -150,7 +150,7 @@ class BulletClothEnv_(object):
 
         # Action/Obs Spaces
         self.action_space = gym.spaces.Box(-1, 1, shape=(3,), dtype=np.float32)
-        self._build_cloth_sites()
+        # self._build_cloth_sites() # <-- ENTFERNEN: Wird jetzt in _build_world aufgerufen
 
         # +++ GEÄNDERT: Reward / Tasks +++
         constraint_infos = _task_definitions.constraints["sideways"](0, 4, 8, self.success_distance)
@@ -189,17 +189,27 @@ class BulletClothEnv_(object):
 
 
     # ------------------- Bullet world -------------------
+    def _setup_simulation(self):
+        """Konfiguriert die Physik-Engine und die Suchpfade."""
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.setGravity(0, 0, -9.81)
+        p.setTimeStep(self.timestep)
+        p.setPhysicsEngineParameter(
+            sparseSdfVoxelSize=0.25,
+        )
+
     def _connect_bullet(self):
         if self._pb_gui:
             p.connect(p.GUI)
         else:
             p.connect(p.DIRECT)
-        p.resetSimulation()
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setTimeStep(self.timestep)
-        p.setGravity(0, 0, -9.81)
+        # Nur verbinden, keine Simulation hier aufsetzen
 
     def _build_world(self):
+        p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
+        self._setup_simulation()
+
+        # Lade die Ebene (aus pybullet_data)
         p.loadURDF("plane.urdf")
         self._table_z = 0.0
 
@@ -212,7 +222,37 @@ class BulletClothEnv_(object):
                                           baseVisualShapeIndex=box_visual_shape_id, basePosition=table_pos)
         self._table_z = table_pos[2] + table_half_extents[2]  # Oberkante des Tisches
 
+        # Roboter laden (aus pybullet_data)
         self.robot_id = p.loadURDF("franka_panda/panda.urdf", [0, 0, 0], useFixedBase=True)
+
+        # Kleidung laden (aus pybullet_data)
+        cloth_pos = [table_pos[0], table_pos[1], self._table_z + 0.05]
+        self.cloth_id = p.loadSoftBody(
+            "cloth_z_up.obj",
+            basePosition=cloth_pos,
+            scale=0.15,
+            mass=1.0, 
+            useNeoHookean=0, 
+            useBendingSprings=1, 
+            useMassSpring=1,
+            springElasticStiffness=40,
+            springDampingStiffness=0.1,
+            springDampingAllDirections=1,
+            useSelfCollision=0,
+            frictionCoeff=0.5,
+            useFaceContact=1
+        )
+        p.changeVisualShape(self.cloth_id, -1,
+            flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1])
+        
+        # Let the cloth settle to prevent the initial "explosion" flicker
+        for _ in range(60):
+            p.stepSimulation()
+
+        # cache current verts for our velocity estimate (see step 2)
+        mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
+        self._prev_soft_verts = np.array(mesh[1], dtype=np.float32)
+
 
         # Gelenke & EE
         self.arm_joint_indices = []
@@ -244,32 +284,72 @@ class BulletClothEnv_(object):
         # neutrale Startpose & Dämpfung
         for j in self.arm_joint_indices:
             p.resetJointState(self.robot_id, j, 0.0, 0.0)
-            p.changeDynamics(self.robot_id, j, linearDamping=0.04, angularDamping=0.04)
+            p.changeDynamics(self.robot_id, j, linearDamping=0.1, angularDamping=0.1)
             # Neutralisiere evtl. Velocity-Controller
             p.setJointMotorControl2(self.robot_id, j, p.VELOCITY_CONTROL, force=0.0)
 
         self._prev_ee_pos = np.array(self.get_ee_position_W())
         p.setRealTimeSimulation(0)
 
+        # build 9x9 logical site grid S0_0..S8_8
+        self._compute_cloth_sites(n=9)
+        # Identifiziere die Eck-Vertices nach dem Erstellen des Tuchs
+        self._build_cloth_sites()
+
     def _build_cloth_sites(self):
-        cloth_size = float(self.randomization_kwargs.get('cloth_size', 0.24))
-        grid_n = 9
-        self._grid_n = grid_n
-        self._grid_mid = grid_n // 2  # = 4
-        half = cloth_size / 2.0
-        xs = np.linspace(-half, half, grid_n)
-        ys = np.linspace(-half, half, grid_n)
-        z = self._table_z + 0.0
-        self._cloth_sites_W = {}
-        self.corner_index_mapping = {"0": f"S0_{grid_n-1}", "1": f"S{grid_n-1}_{grid_n-1}",
-                                     "2": "S0_0", "3": f"S{grid_n-1}_0"}
-        self.cloth_site_names = []
-        for i, xv in enumerate(xs):
-            for j, yv in enumerate(ys):
-                self._cloth_sites_W[f"S{i}_{j}"] = np.array([xv, yv, z])
-                self.cloth_site_names.append(f"S{i}_{j}")
-        self.mid_corner_index = 4
-        self.max_corner_name = f"S{grid_n-1}_{grid_n-1}"
+        # Diese Methode ist jetzt für die Identifizierung der Eck-Vertices zuständig
+        mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
+        verts = mesh[1]
+        min_x = min(v[0] for v in verts); max_x = max(v[0] for v in verts)
+        min_y = min(v[1] for v in verts); max_y = max(v[1] for v in verts)
+
+        targets = {
+            "top_left":    (min_x, max_y),
+            "top_right":   (max_x, max_y),
+            "bottom_left": (min_x, min_y),
+            "bottom_right":(max_x, min_y),
+        }
+
+        def dist2(v, t): return (v[0]-t[0])**2 + (v[1]-t[1])**2
+
+        self.corner_vertex_ids = {}
+        for name, t in targets.items():
+            self.corner_vertex_ids[name] = min(range(len(verts)), key=lambda i: dist2(verts[i], t))
+
+        # Mapping für Kompatibilität mit bestehendem Code
+        self.cloth_site_names = [f"v_{i}" for i in range(len(verts))]
+        self.corner_index_mapping = {
+            "0": f"v_{self.corner_vertex_ids['top_right']}",
+            "1": f"v_{self.corner_vertex_ids['bottom_right']}",
+            "2": f"v_{self.corner_vertex_ids['top_left']}",
+            "3": f"v_{self.corner_vertex_ids['bottom_left']}",
+        }
+        self.mid_corner_index = -1 # Nicht mehr anwendbar
+        self.max_corner_name = f"v_{self.corner_vertex_ids['bottom_right']}"
+
+
+    def _compute_cloth_sites(self, n=9):
+        """Build a stable S{row}_{col} -> vertex index dict from the soft body mesh."""
+        mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
+        verts = np.array(mesh[1], dtype=np.float32)
+        if verts.ndim == 1:
+            verts = verts.reshape(-1, 3)
+
+        mins = verts.min(axis=0)
+        maxs = verts.max(axis=0)
+        xs = np.linspace(mins[0], maxs[0], n)
+        ys = np.linspace(mins[1], maxs[1], n)
+
+        sites = {}
+        xy = verts[:, :2]
+        for r, y in enumerate(ys):
+            for c, x in enumerate(xs):
+                d2 = (xy[:,0]-x)**2 + (xy[:,1]-y)**2
+                idx = int(np.argmin(d2))
+                sites[f"S{r}_{c}"] = f"v_{idx}"
+        self._cloth_sites_v_indices = sites
+        return sites
+
 
     # ------------------- Gym hooks -------------------
     def seed(self, seed=None):
@@ -284,7 +364,7 @@ class BulletClothEnv_(object):
         self.current_step = 0
 
     def reset(self):
-        p.resetSimulation()
+        # _build_world kümmert sich jetzt um den Reset und das Setup
         self._build_world()
         self.reset_osc_values()
         self.relative_origin = self.get_ee_position_W()
@@ -326,13 +406,22 @@ class BulletClothEnv_(object):
         return np.array([p.getJointState(self.robot_id, j)[1] for j in self.arm_joint_indices])
 
     def get_cloth_position_W(self):
-        return {k: v.copy() for k, v in self._cloth_sites_W.items()}
+        mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
+        verts = mesh[1]
+        return {f"v_{i}": np.array(v) for i, v in enumerate(verts)}
 
     def get_cloth_position_I(self):
-        return {k: (v - self.relative_origin) for k, v in self._cloth_sites_W.items()}
+        positions_W = self.get_cloth_position_W()
+        return {k: (v - self.relative_origin) for k, v in positions_W.items()}
 
     def get_cloth_velocity(self):
-        return {k: np.zeros(3) for k in self._cloth_sites_W.keys()}
+        # Estimate per-vertex velocity from position differences
+        mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
+        verts = np.array(mesh[1], dtype=np.float32)
+        dt = max(self.timestep, 1e-6)
+        vels = (verts - getattr(self, "_prev_soft_verts", verts)) / dt
+        self._prev_soft_verts = verts
+        return {f"v_{i}": vels[i] for i in range(len(vels))}
 
     # ------------------- camera -------------------
     def _camera_params(self):
@@ -367,9 +456,10 @@ class BulletClothEnv_(object):
 
 
     def _get_cloth_center_W(self):
-        """Weltkoordinate des Grid-Mittelpunkts S4_4 (MuJoCo nutzt B4_4 als Lookat)."""
-        name = f"S{self._grid_mid}_{self._grid_mid}"
-        return self._cloth_sites_W[name].copy()
+        """Weltkoordinate des Cloth-Mittelpunkts."""
+        mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
+        verts = np.array(mesh[1])
+        return np.mean(verts, axis=0)
 
 
     def _camera_eye_from_type(self, center, cam_type):
@@ -427,10 +517,22 @@ class BulletClothEnv_(object):
     def sample_goal_I(self):
         goal = np.zeros(self.single_goal_dim * len(self.constraints), dtype=np.float32)
         noise = self.np_random.uniform(self.goal_noise_range[0], self.goal_noise_range[1])
+        cloth_positions_I = self.get_cloth_position_I()
         for i, constraint in enumerate(self.constraints):
+            # Map logical sites (S0_0) to vertex names (v_123)
+            site1_v_name = self._cloth_sites_v_indices[constraint.site1]
+            site2_v_name = self._cloth_sites_v_indices[constraint.site2]
+
+            # Create a temporary constraint with the correct vertex names
+            temp_constraint = Constraint(
+                site1=site1_v_name,
+                site2=site2_v_name,
+                distance=constraint.distance,
+                noise_directions=constraint.noise_directions
+            )
             goal[i * self.single_goal_dim:(i + 1) * self.single_goal_dim] = \
-                (constraint.get_desired_goal(
-                    self.get_cloth_position_I(), noise)).flatten()
+                (temp_constraint.get_desired_goal(
+                    cloth_positions_I, noise)).flatten()
         return goal, noise
 
     def compute_task_reward(self, achieved_goal, desired_goal, info):
@@ -439,9 +541,11 @@ class BulletClothEnv_(object):
     # ------------------- obs dict -------------------
     def get_obs(self):
         achieved_goal_I = np.zeros(self.single_goal_dim * len(self.constraints), dtype=np.float32)
+        cloth_positions_I = self.get_cloth_position_I()
         for i, constraint in enumerate(self.constraints):
+            site1_v_name = self._cloth_sites_v_indices[constraint.site1]
             achieved_goal_I[i * self.single_goal_dim:(i + 1) * self.single_goal_dim] = \
-                constraint.get_achieved_goal(self.get_cloth_position_I())
+                cloth_positions_I[site1_v_name]
 
         cloth_position = np.array(list(self.get_cloth_position_I().values()), dtype=np.float32)
         cloth_velocity = np.array(list(self.get_cloth_velocity().values()), dtype=np.float32)
@@ -579,10 +683,13 @@ class BulletClothEnv_(object):
     def get_corner_constraint_distances(self):
         inv = {v: k for k, v in self.corner_index_mapping.items()}
         distances = {"0": 0, "1": 0, "2": 0, "3": 0}
+        cloth_positions_I = self.get_cloth_position_I()
         for i, c in enumerate(self.constraints):
-            if c.site1 in inv:
-                dist = c.get_distance(self.get_cloth_position_I())
-                distances[inv[c.site1]] = dist
+            site1_v_name = self._cloth_sites_v_indices.get(c.site1)
+            if site1_v_name in inv:
+                site2_v_name = self._cloth_sites_v_indices.get(c.site2)
+                dist = np.linalg.norm(cloth_positions_I[site1_v_name] - cloth_positions_I[site2_v_name])
+                distances[inv[site1_v_name]] = dist
         return distances
 
     def post_action(self, obs, raw_action, cosine_distance):
