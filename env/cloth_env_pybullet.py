@@ -24,6 +24,7 @@ except Exception:
 try:
     import pybullet as p
     import pybullet_data
+    import psutil
 except Exception as e:
     p = None
     _IMPORT_ERR = e
@@ -131,7 +132,10 @@ class BulletClothEnv_(object):
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
 
         self.single_goal_dim = 3
-        self.process = None  # optional psutil
+        try:
+            self.process = psutil.Process(os.getpid())
+        except (NameError, AttributeError):
+            self.process = None
 
         # workspace (relativ zur Reset-EE-Position)
         self.limits_min = [-0.35, -0.35, 0.0]
@@ -896,6 +900,7 @@ class BulletClothEnv_(object):
             "ctrl_error": ctrl_error,
             "corner_sum_error": 0.0,
             "corner_positions": corner_positions,
+            "env_memory_usage": self.process.memory_info().rss if self.process else 0,
         }
         dists = self.get_corner_constraint_distances()
         for k in dists.keys():
@@ -910,6 +915,52 @@ class BulletClothEnv_(object):
         if self.episode_ee_close_steps >= self.max_close_steps:
             done = True
         return reward, done, info
+
+    def capture_images(self, aux_output=None):
+        """
+        Erfasst Bilder aus der Simulationskamera, ähnlich der MuJoCo-Implementierung.
+        Gibt das Haupt-Kamerabild für alle erwarteten Ausgaben zurück, da
+        keine separaten Kameras wie 'eval_camera' konfiguriert sind.
+        """
+        W, H = self.image_size
+        view, proj = self._camera_params(W, H)
+        _, _, rgba, _, _ = p.getCameraImage(W, H, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
+        img = np.reshape(rgba, (H, W, 4))[:, :, :3].astype("uint8")
+
+        # Optional: Zeichne Hilfspunkte, falls `aux_output` gegeben ist.
+        # Dies ist eine vereinfachte Darstellung.
+        if aux_output is not None and self._pb_gui:
+            # aux_output sind normalisierte 2D-Koordinaten.
+            # PyBullet hat keine einfache 2D-Overlay-Funktion, daher wird dies übersprungen.
+            # Für eine vollständige Implementierung wären Projektionen von 3D-Punkten nötig.
+            pass
+
+        # Die Funktion erwartet 5 Bilder, also geben wir 5-mal das erfasste Bild zurück.
+        return (
+            img.copy(),
+            img.copy(),
+            img.copy(),
+            img.copy(),
+            img.copy(),
+        )
+
+    def get_trajectory_log_entry(self):
+        """
+        Sammelt und gibt einen Eintrag für das Trajektorien-Log zurück,
+        analog zur MuJoCo-Implementierung.
+        """
+        entry = {
+            'origin': self.relative_origin,
+            'output_max': self.output_max,
+            'desired_pos_step_I': self.desired_pos_step_W - self.relative_origin,
+            'desired_pos_ctrl_I': self.desired_pos_ctrl_W - self.relative_origin,
+            'ee_position_I': self.get_ee_position_I(),
+            'raw_action': self.previous_raw_action,
+            'substeps': self.substeps,
+            'timestep': self.timestep,
+            'goal_noise': self.goal_noise
+        }
+        return entry
 
 
 class ClothEnvBullet(BulletClothEnv_):
