@@ -36,7 +36,7 @@ def _compute_cosine_distance(a, b):
     return float(np.dot(a, b) / denom)
 
 
-# +++ HINZUGEFÜGT: Definition der Constraint-Klasse +++
+# Constraint-Klasse
 class Constraint:
     def __init__(self, site1, site2, distance, noise_directions=None):
         self.site1 = site1
@@ -156,9 +156,8 @@ class BulletClothEnv_(object):
 
         # Action/Obs Spaces
         self.action_space = gym.spaces.Box(-1, 1, shape=(3,), dtype=np.float32)
-        # self._build_cloth_sites() # <-- ENTFERNEN: Wird jetzt in _build_world aufgerufen
 
-        # +++ GEÄNDERT: Reward / Tasks +++
+        # Reward / Tasks
         constraint_infos = _task_definitions.constraints["sideways"](0, 4, 8, self.success_distance)
         self.constraints = [Constraint(
             site1=info['origin'],
@@ -268,7 +267,10 @@ class BulletClothEnv_(object):
         for _ in range(60):
             p.stepSimulation()
 
-        # +++ HINZUGEFÜGT: Statisches Kameraziel nach dem Settling speichern +++
+        # Initialize finger link indices before use
+        self.left_finger_link_index = None
+        self.right_finger_link_index = None
+        # Statisches Kameraziel nach dem Settling speichern
         self._fixed_camera_target = self._get_cloth_center_W()
 
         # cache current verts for our velocity estimate (see step 2)
@@ -279,13 +281,48 @@ class BulletClothEnv_(object):
         # Gelenke & EE
         self.arm_joint_indices = []
         self.ee_link_index = None
+        self.grasp_target_link_index = -1 # ID for the grasp point link
+        self.finger_joint_indices = []
+        self.left_finger_joint_index = None
+
+        # Change visual properties of the gripper
         for j in range(p.getNumJoints(self.robot_id)):
-            ji = p.getJointInfo(self.robot_id, j)
-            if ji[2] == p.JOINT_REVOLUTE:
+            info = p.getJointInfo(self.robot_id, j)
+            link_name = info[12].decode('UTF-8')
+
+            # Find revolute joints for arm control
+            if info[2] == p.JOINT_REVOLUTE:
                 self.arm_joint_indices.append(j)
-            name = ji[12].decode() if isinstance(ji[12], (bytes, bytearray)) else str(ji[12])
-            if name == "panda_hand":
+
+            # also collect the finger prismatic joints by *joint* name
+            if info[2] == p.JOINT_PRISMATIC:
+                if 'leftfinger' in link_name:
+                    self.finger_joint_indices.append(j)
+                    p.setCollisionFilterGroupMask(self.robot_id, j, 1, 0)
+                elif 'rightfinger' in link_name:
+                    self.finger_joint_indices.append(j)
+                    p.setCollisionFilterGroupMask(self.robot_id, j, 1, 0)
+
+            if link_name == 'panda_leftfinger':
+                self.left_finger_link_index = j
+            elif link_name == 'panda_rightfinger':
+                self.right_finger_link_index = j
+            elif link_name == 'panda_hand':
                 self.ee_link_index = j
+                self.hand_link_index = j
+            elif link_name == 'panda_grasptarget':
+                self.grasp_target_link_index = j
+        
+        # Finger control params (env-tunable)
+        self.finger_closed_pos = 0.0
+        self.finger_max_force  = float(os.getenv("FINGER_FORCE", 200))  # much stronger
+        self.finger_kp         = float(os.getenv("FINGER_KP", 1.0))
+        self.finger_max_vel    = float(os.getenv("FINGER_MAX_VEL", 2.0))
+
+        # after the loop: drive grasp target as EE so control + anchor align
+        if self.grasp_target_link_index != -1:
+            self.ee_link_index = self.grasp_target_link_index
+
         if self.ee_link_index is None and self.arm_joint_indices:
             # Fallback to the last link of the arm if 'panda_hand' is not found
             self.ee_link_index = self.arm_joint_indices[-1] + 1
@@ -310,10 +347,14 @@ class BulletClothEnv_(object):
             # Neutralisiere evtl. Velocity-Controller
             p.setJointMotorControl2(self.robot_id, j, p.VELOCITY_CONTROL, force=0.0)
 
+        for j in self.finger_joint_indices:
+            p.resetJointState(self.robot_id, j, self.finger_closed_pos, 0.0)  # start exactly closed
+            p.setJointMotorControl2(self.robot_id, j, p.VELOCITY_CONTROL, force=0.0)
+
         self._prev_ee_pos = np.array(self.get_ee_position_W())
         p.setRealTimeSimulation(0)
 
-        # build 9x9 logical site grid S0_0..S8_8
+        # build 9x9 logical site S0_0..S8_8
         self._compute_cloth_sites(n=9)
         # Identifiziere die Eck-Vertices nach dem Erstellen des Tuchs
         self._build_cloth_sites()
@@ -321,10 +362,13 @@ class BulletClothEnv_(object):
         # Set a stable debug camera and re-enable rendering
         if self._pb_gui and _render_was_on:
             center = self._get_cloth_center_W()
-            cam_type = str(self.randomization_kwargs.get("camera_type", "side")).lower()
+            #cam_type = str(self.randomization_kwargs.get("camera_type", "side")).lower()
+            cam_type = "default"
             eye, _ = self._camera_eye_from_type(center, cam_type)  # <-- unpack tuple
             self._set_debug_camera_from_eye(center, eye)  # <-- pass only eye
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
+
+        self._weld_fingers_shut()
 
     def _build_cloth_sites(self):
         # Diese Methode ist jetzt für die Identifizierung der Eck-Vertices zuständig
@@ -356,6 +400,30 @@ class BulletClothEnv_(object):
         }
         self.mid_corner_index = -1 # Nicht mehr anwendbar
         self.max_corner_name = f"v_{self.corner_vertex_ids['bottom_right']}"
+
+
+    def _weld_fingers_shut(self):
+        # Weld each finger link rigidly to the hand link
+        for attr in ("_lf_weld", "_rf_weld"):
+            cid = getattr(self, attr, None)
+            if cid is not None:
+                try: p.removeConstraint(cid)
+                except Exception: pass
+                setattr(self, attr, None)
+    
+        if self.hand_link_index is not None:
+            if self.left_finger_link_index is not None:
+                self._lf_weld = p.createConstraint(self.robot_id, self.hand_link_index,
+                                                   self.robot_id, self.left_finger_link_index,
+                                                   jointType=p.JOINT_FIXED, jointAxis=[0,0,0],
+                                                   parentFramePosition=[0,0,0], childFramePosition=[0,0,0])
+                p.changeConstraint(self._lf_weld, maxForce=self.finger_max_force)
+            if self.right_finger_link_index is not None:
+                self._rf_weld = p.createConstraint(self.robot_id, self.hand_link_index,
+                                                   self.robot_id, self.right_finger_link_index,
+                                                   jointType=p.JOINT_FIXED, jointAxis=[0,0,0],
+                                                   parentFramePosition=[0,0,0], childFramePosition=[0,0,0])
+                p.changeConstraint(self._rf_weld, maxForce=self.finger_max_force)
 
 
     def _compute_cloth_sites(self, n=9):
@@ -397,8 +465,54 @@ class BulletClothEnv_(object):
         # _build_world kümmert sich jetzt um den Reset und das Setup
         self._build_world()
         self.reset_osc_values()
+
+        # Pick the corner we want
+        cloth_positions_W = self.get_cloth_position_W()
+        corner_v_name = self.corner_index_mapping["0"] # e.g., top_right corner
+        corner_world = cloth_positions_W[corner_v_name]
+
+        joint_positions = p.calculateInverseKinematics(
+            self.robot_id,
+            self.ee_link_index,
+            corner_world,
+            lowerLimits=self.joint_lower_limits,
+            upperLimits=self.joint_upper_limits,
+            jointRanges=self.joint_ranges,
+            restPoses=self.joint_rest_poses,
+        )
+
+        # Reset robot joints to the new starting pose
+        for i, joint_index in enumerate(self.arm_joint_indices):
+            p.resetJointState(self.robot_id, joint_index, joint_positions[i])
+
+        # --- micro-correct: if the link isn't exactly on the corner, nudge once
+        ls = p.getLinkState(self.robot_id, self.ee_link_index, computeForwardKinematics=True)
+        ee_now = np.array(ls[4])
+        delta = corner_world - ee_now
+        if np.linalg.norm(delta) > 1e-4:
+            joint_positions = p.calculateInverseKinematics(
+                self.robot_id, self.ee_link_index, corner_world,
+                lowerLimits=self.joint_lower_limits,
+                upperLimits=self.joint_upper_limits,
+                jointRanges=self.joint_ranges,
+                restPoses=self.joint_rest_poses,
+            )
+            for i, joint_index in enumerate(self.arm_joint_indices):
+                p.resetJointState(self.robot_id, joint_index, joint_positions[i])
+            p.stepSimulation()
+
+        corner_vertex_index = int(corner_v_name.split('_')[1])
+        p.createSoftBodyAnchor(
+            self.cloth_id,
+            corner_vertex_index,
+            self.robot_id,
+            self.hand_link_index,
+            [0, 0, 0]
+        )
+
+        # Update desired positions to the new start
         self.relative_origin = self.get_ee_position_W()
-        self.desired_pos_ctrl_W = self.relative_origin + np.array([0.05, 0.0, 0.0], np.float32)
+        self.desired_pos_ctrl_W = self.relative_origin.copy()
         self.desired_pos_step_W = self.desired_pos_ctrl_W.copy()
         self.min_absolute_W = self.relative_origin + np.array(self.limits_min)
         self.max_absolute_W = self.relative_origin + np.array(self.limits_max)
@@ -409,9 +523,6 @@ class BulletClothEnv_(object):
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
-        # optional: Ziel/EE ausgeben
-        if self._print_targets:
-            print(f"[RESET] goal_I={self.goal.round(3)}")
         
         return self.get_obs()
 
@@ -473,11 +584,12 @@ class BulletClothEnv_(object):
         self._cam_fov = fov  # 1:1 zu MuJoCo: fov aus Model/Config übernehmen
 
         # Lookat = Center des Cloth-Grids (S4_4), wie MuJoCo reset_camera() B4_4
-        # GEÄNDERT: Statisches Ziel verwenden, damit die Kamera nicht dem Tuch folgt
+        # Statisches Ziel verwenden, damit die Kamera nicht dem Tuch folgt
         center = getattr(self, "_fixed_camera_target", self._get_cloth_center_W())
 
         # Eye-Offset aus camera_type ableiten (tweakbar via ENV)
-        cam_type = os.getenv("CAM_TYPE", str(self.randomization_kwargs.get("camera_type", "side"))).lower()
+        #cam_type = os.getenv("CAM_TYPE", str(self.randomization_kwargs.get("camera_type", "side"))).lower()
+        cam_type = "default"
         eye, up = self._camera_eye_from_type(center, cam_type)
 
         aspect = float(self._cam_w) / max(1.0, float(self._cam_h))
@@ -543,20 +655,20 @@ class BulletClothEnv_(object):
             dx = float(os.getenv("CAM_DIAG_DX", "1.0"))
             dy = float(os.getenv("CAM_DIAG_DY", "1.0"))
             dz = float(os.getenv("CAM_DIAG_DZ", "1.0"))
-            up = [0.0, 0.0, 1.0]  # Ändere den "up" Vektor, um die Kamera schräg von oben zu halten
+            up = [0.0, 0.0, 1.0]
         elif cam_type == "diag_portrait":
-            # Wie "diag", aber um 90 Grad gedreht ("Hochformat")
             dx = float(os.getenv("CAM_DIAG_DX", "0.4"))
             dy = float(os.getenv("CAM_DIAG_DY", "0.4"))
             dz = float(os.getenv("CAM_DIAG_DZ", "0.4"))
-            up = [-1.0, 0.0, 0.0]  # Ändere den "up" Vektor, um die Kamera um 90 Grad zu drehen
+            up = [-1.0, 0.0, 0.0]
         elif cam_type == "side_far":
             dx = float(os.getenv("CAM_SIDE_FAR_DX", "-0.7"))
             dy = float(os.getenv("CAM_SIDE_FAR_DY", "0.0"))
             dz = float(os.getenv("CAM_SIDE_FAR_DZ", "0.4"))
         else:
-            # Fallback wie vorher: direkt von oben
-            dx = 0.0; dy = 0.0; dz = 0.80
+            up = [0.0, 0.0, 1.0]
+            dx = -1.0; dy = -1.0; dz = 1.00
+
 
         eye = center + np.array([dx, dy, dz], dtype=np.float32)
         return eye.tolist(), up
@@ -705,7 +817,19 @@ class BulletClothEnv_(object):
                 targetPositions=joint_positions[:7],
                 forces=self.joint_max_forces[:7],
             )
-
+            # Hard-close the fingers every substep
+            for j in self.finger_joint_indices:
+                p.setJointMotorControl2(
+                    self.robot_id, j, p.POSITION_CONTROL,
+                    targetPosition=self.finger_closed_pos,
+                    force=self.finger_max_force,
+                    positionGain=self.finger_kp,
+                    maxVelocity=self.finger_max_vel
+                )
+                # Safety: if anything drifted, snap it back exactly closed
+                js = p.getJointState(self.robot_id, j)[0]
+                if abs(js - self.finger_closed_pos) > 1e-5:
+                    p.resetJointState(self.robot_id, j, self.finger_closed_pos, 0.0)
             # Physik-Schritt
             p.stepSimulation()
 
@@ -717,17 +841,18 @@ class BulletClothEnv_(object):
             # Debug-Zeug
             if self._pb_gui:
                 p.addUserDebugLine(previous_desired_pos_step_W, self.desired_pos_step_W, [1,0,0], 2, 0.1)
+                # Visualize grasp target point
+                if self.grasp_target_link_index != -1:
+                    ls = p.getLinkState(self.robot_id, self.grasp_target_link_index)
+                    grasp_pos = ls[0]
+                    # Green point at the grasp target
+                    p.addUserDebugPoints([grasp_pos], [[0, 1, 0]], pointSize=10, lifeTime=0.1)
+
                 ee_pos = self.get_ee_position_W()
                 ctrl_samples.append(ee_pos)
 
         obs = self.get_obs()
         reward, done, info = self.post_action(obs, raw_action, cosine_distance)
-
-        # TEMP: fake corner labels, damit Aux-Loss kein NaN erzeugt
-        info['corner_positions'] = np.array([[0.1, 0.1],
-                                             [0.9, 0.1],
-                                             [0.1, 0.9],
-                                             [0.9, 0.9]], dtype=np.float32)
 
         self.previous_raw_action = raw_action.copy()
         self.current_step += 1
@@ -741,13 +866,6 @@ class BulletClothEnv_(object):
         info['ee_target_W'] = self.desired_pos_ctrl_W.copy()
         info['ee_target_step_W'] = self.desired_pos_step_W.copy()
         info['ee_W'] = self.get_ee_position_W().copy()
-
-        # optional: Ziel/EE ausgeben
-        if self._print_targets and (self.current_step % self._print_every == 0):
-            print(f"[{self.current_step:03d}] "
-                  f"ee_I={self.get_ee_position_I().round(3)}, "
-                  f"tgt_I={(self.desired_pos_step_W - self.relative_origin).round(3)}, "
-                  f"goal_I={self.goal.round(3)}")
 
         return obs, reward, done, info
 
