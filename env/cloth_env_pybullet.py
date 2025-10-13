@@ -407,8 +407,8 @@ class BulletClothEnv_(object):
         for attr in ("_lf_weld", "_rf_weld"):
             cid = getattr(self, attr, None)
             if cid is not None:
-                try: p.removeConstraint(cid)
-                except Exception: pass
+                # The simulation is reset, so the constraint ID is invalid.
+                # p.resetSimulation() handles cleanup.
                 setattr(self, attr, None)
     
         if self.hand_link_index is not None:
@@ -840,14 +840,6 @@ class BulletClothEnv_(object):
 
             # Debug-Zeug
             if self._pb_gui:
-                p.addUserDebugLine(previous_desired_pos_step_W, self.desired_pos_step_W, [1,0,0], 2, 0.1)
-                # Visualize grasp target point
-                if self.grasp_target_link_index != -1:
-                    ls = p.getLinkState(self.robot_id, self.grasp_target_link_index)
-                    grasp_pos = ls[0]
-                    # Green point at the grasp target
-                    p.addUserDebugPoints([grasp_pos], [[0, 1, 0]], pointSize=10, lifeTime=0.1)
-
                 ee_pos = self.get_ee_position_W()
                 ctrl_samples.append(ee_pos)
 
@@ -888,12 +880,22 @@ class BulletClothEnv_(object):
         is_success = reward > self.fail_reward
         delta_size = float(np.linalg.norm(raw_action))
         ctrl_error = float(np.linalg.norm(self.desired_pos_ctrl_W - self.get_ee_position_W()))
+        
+        cloth_positions_I = self.get_cloth_position_I()
+        corner_positions = np.array([
+            cloth_positions_I[self.corner_index_mapping["0"]][:2],
+            cloth_positions_I[self.corner_index_mapping["1"]][:2],
+            cloth_positions_I[self.corner_index_mapping["2"]][:2],
+            cloth_positions_I[self.corner_index_mapping["3"]][:2],
+        ], dtype=np.float32)
+
         info = {
             "reward": float(reward),
             "is_success": bool(is_success),
             "delta_size": delta_size,
             "ctrl_error": ctrl_error,
             "corner_sum_error": 0.0,
+            "corner_positions": corner_positions,
         }
         dists = self.get_corner_constraint_distances()
         for k in dists.keys():
