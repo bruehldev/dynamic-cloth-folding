@@ -11,10 +11,9 @@ BACKEND = os.getenv('PHYSICS', 'bullet').lower()
 SKIP_DR = os.getenv('NO_DR', '1') == '1'
 
 if BACKEND == 'bullet':
-    from env.cloth_env_pybullet import ClothEnvBullet as ClothEnv
+    from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
 else:
     from env.cloth_env import ClothEnv
-
 def _maybe_randomize(wrapped_env, randomization_kwargs):
     if SKIP_DR:
         return wrapped_env
@@ -41,18 +40,18 @@ pylog = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
 
-# ---- NaN/Inf-Schutz für jede Env (bevor NormalizedBoxEnv) -------------------
+# ---- NaN/Inf protection for every Env (before NormalizedBoxEnv) -------------------
 import numpy as _np
 import gym as _gym
 
 class SanitizeObsWrapper(_gym.Wrapper):
     """
-    Ersetzt NaN/Inf in allen Dict-Observationen & clipt auf sinnvolle Bereiche.
-    Greift sowohl in reset() als auch step().
+    Replaces NaN/Inf in all Dict observations & clips to sensible ranges.
+    Applies in both reset() and step().
     """
     def __init__(self, env, clip_dict=None):
         super().__init__(env)
-        # optionale Clip-Grenzen je Key; default: keine Clips
+        # optional clip limits per key; default: no clips
         self.clip_dict = clip_dict or {}
 
     def _clean(self, obs):
@@ -84,7 +83,7 @@ class SanitizeObsWrapper(_gym.Wrapper):
 
 
 class PostNormalizeSanitizer(_gym.Wrapper):
-    """Fängt NaN/Inf ab, die evtl. durch NormalizedBoxEnv entstehen."""
+    """Catches NaN/Inf that might be introduced by NormalizedBoxEnv."""
     def _clean(self, obs):
         if isinstance(obs, dict):
             return {k: _np.nan_to_num(_np.asarray(v, _np.float32),
@@ -101,7 +100,7 @@ class PostNormalizeSanitizer(_gym.Wrapper):
 
 
 def _wrap_env_with_sanitizer(env):
-    # sehr konservative Clips:
+    # very conservative clips:
     # - image: [0,1]
     # - robot_observation/observation: [-1e3, 1e3]
     clip_cfg = {
@@ -116,10 +115,10 @@ def _wrap_env_with_sanitizer(env):
 
 class LenientKeyPathCollector(data_collector.KeyPathCollector):
     """
-    Ein KeyPathCollector, der für den GUI-Modus angepasst ist.
-    1. Er ignoriert unerwartete Keyword-Argumente in `collect_new_paths`.
-    2. Er stellt sicher, dass die Beobachtungsdaten (obs, goal, etc.) zu einem
-       einzigen Vektor zusammengefügt werden, wie es die Policy erwartet.
+    A KeyPathCollector adapted for GUI mode.
+    1. It ignores unexpected keyword arguments in `collect_new_paths`.
+    2. It ensures that observation data (obs, goal, etc.) is concatenated
+       into a single vector as expected by the policy.
     """
     def __init__(
             self,
@@ -129,7 +128,7 @@ class LenientKeyPathCollector(data_collector.KeyPathCollector):
             desired_goal_key='desired_goal',
             **kwargs
     ):
-        # Filtere unerwartete kwargs heraus, die nur für VectorizedKeyPathCollector sind
+        # Filter out unexpected kwargs that are only for VectorizedKeyPathCollector
         import inspect
         parent_init_spec = inspect.getfullargspec(super().__init__)
         accepted_kwargs = {
@@ -146,19 +145,19 @@ class LenientKeyPathCollector(data_collector.KeyPathCollector):
 
     def _get_action_and_info(self, observation):
         """
-        Nimmt das Beobachtungs-Dictionary, fügt die Teile zu einem einzigen
-        Vektor zusammen und holt dann die Aktion von der Policy.
+        Takes the observation dictionary, concatenates the parts into a single
+        vector, and then gets the action from the policy.
         """
-        # Baue den flachen Beobachtungsvektor so zusammen, wie es die Policy erwartet.
-        # Die Reihenfolge ist entscheidend und muss mit der Konfiguration in
-        # `get_keys_and_dims` übereinstimmen.
+        # Build the flat observation vector as the policy expects it.
+        # The order is crucial and must match the configuration in
+        # `get_keys_and_dims`.
         obs = np.hstack([
             observation[key] for key in self._observation_key
         ])
         return self.policy.get_action(obs)
 
     def collect_new_paths(self, max_path_length, num_steps, discard_incomplete_paths, **kwargs):
-        # Ignoriere die zusätzlichen kwargs und rufe die Elternmethode auf.
+        # Ignore the additional kwargs and call the parent method.
         return super().collect_new_paths(
             max_path_length=max_path_length,
             num_steps=num_steps,
@@ -177,6 +176,17 @@ def experiment(variant):
 
     USE_SMOKE = os.getenv("SMOKE_TRAIN", "0") == "1"
 
+    # --- Debugging: Early evaluation and saving ---
+    # Example: export EVAL_FREQ=1000
+    eval_freq = os.getenv("EVAL_FREQ")
+    if eval_freq:
+        eval_freq = int(eval_freq)
+        alg['num_expl_steps_per_train_loop'] = max(eval_freq, alg['batch_size'])
+        alg['num_train_loops_per_epoch'] = 1
+        print(f"DEBUG: Evaluation frequency set to every {alg['num_expl_steps_per_train_loop']} steps.")
+    # ---------------------------------------------------------
+
+
     if USE_SMOKE:
         alg['num_epochs'] = 1
         alg['num_train_loops_per_epoch'] = 1
@@ -190,7 +200,7 @@ def experiment(variant):
             'max_path_length','num_expl_steps_per_train_loop','num_trains_per_train_loop',
             'min_num_steps_before_training','batch_size')})
     if not USE_SMOKE:
-        # Nur überschreiben, wenn Env-Variablen gesetzt sind – sonst die variant-/Repo-Defaults lassen
+        # Only overwrite if environment variables are set - otherwise use variant/repo defaults
         if "NUM_EPOCHS" in os.environ:
             alg['num_epochs'] = int(os.environ["NUM_EPOCHS"])
         if "EXPL_STEPS" in os.environ:
@@ -200,15 +210,15 @@ def experiment(variant):
         if "BATCH" in os.environ:
             alg['batch_size'] = int(os.environ["BATCH"])
 
-        # Sicherheitsbedingung (mit den finalen Werten – egal ob aus Repo-Default oder Override)
+        # Safety condition (with the final values - whether from repo default or override)
         assert alg['batch_size'] <= alg['num_expl_steps_per_train_loop'], \
-            "batch_size muss ≤ num_expl_steps_per_train_loop sein"
+            "batch_size must be <= num_expl_steps_per_train_loop"
 
-    # 1) Run-spezifischer Log-Ordner unter save_folder
+    # 1) Run-specific log folder under save_folder
     run_log_dir = os.path.join(variant["save_folder"], "logs")
     os.makedirs(run_log_dir, exist_ok=True)
 
-    # Hauptprozess-Logger
+    # Main process logger
     runlog = RunLogger(root=run_log_dir, project="dynamic-cloth-folding")
 
     env_kwargs = dict(variant['env_kwargs'])
@@ -219,7 +229,7 @@ def experiment(variant):
     print("PHYSICS backend:", getattr(eval_env, "_backend_name", "unknown"),
           "| class:", type(eval_env).__name__)
 
-    # Sanitize → Normalize → Sanitize (Post)
+    # Sanitize -> Normalize -> Sanitize (Post)
     eval_env = _wrap_env_with_sanitizer(eval_env)
     eval_env = wrappers.NormalizedBoxEnv(eval_env)
     eval_env = PostNormalizeSanitizer(eval_env)
@@ -283,12 +293,12 @@ def experiment(variant):
     evaluation_suite = eval_suite.EvalTestSuite(
         tests=[success_test, real_corner_test])
 
-    # --- Worker-Env-Fabrik: Jeder Subprozess bekommt seinen eigenen RunLogger ---
-    # ABER: Wenn GUI an ist, wollen wir die Exploration im Hauptprozess sehen.
-    # Dann verwenden wir einen KeyPathCollector mit der eval_env.
+    # --- Worker environment factory: Each subprocess gets its own RunLogger ---
+    # BUT: If GUI is on, we want to see the exploration in the main process.
+    # In that case, we use a KeyPathCollector with the eval_env.
     if os.getenv('WITH_GUI', '0') == '1':
-        # Verwende den toleranten Collector, der unerwartete Argumente ignoriert
-        # und die path_collector_kwargs aus der Variante übernimmt.
+        # Use the lenient collector that ignores unexpected arguments
+        # and inherits path_collector_kwargs from the variant.
         exploration_path_collector = LenientKeyPathCollector(
             randomized_eval_env,
             policy,
@@ -296,7 +306,7 @@ def experiment(variant):
             desired_goal_key=env_keys['desired_goal_key'],
             **variant['path_collector_kwargs'],
         )
-        # vec_env wird dann nicht gebraucht
+        # vec_env is not needed then
         vec_env = None
     else:
         def make_worker_env_function():
@@ -337,7 +347,7 @@ def experiment(variant):
         **variant['replay_buffer_kwargs']
     )
 
-    # --- Patch: num train calls sauber durchreichen ---
+    # --- Patch: Pass num train calls cleanly ---
     base_trainer = sac.SACTrainer(
         policy_target_entropy=-np.prod(eval_env.action_space.shape).item(),
         policy=policy,
@@ -356,7 +366,7 @@ def experiment(variant):
         d = {}
         if callable(orig_get_diag):
             d = orig_get_diag() or {}
-        # Zähler aus dem inneren SACTrainer anhängen
+        # Append counter from the inner SACTrainer
         d["num train calls"] = getattr(base_trainer, "_n_train_steps_total", 0)
         return d
 
@@ -384,7 +394,7 @@ def experiment(variant):
 def _debug_rollout(env, policy, steps=200):
     o = env.reset()
     for t in range(steps):
-        # deterministische Policy für Sichtprüfung
+        # deterministic policy for visual inspection
         a = policy.get_action(o)[0] if hasattr(policy, "get_action") else env.action_space.sample()
         o, r, d, _ = env.step(a)
         if d: o = env.reset()
