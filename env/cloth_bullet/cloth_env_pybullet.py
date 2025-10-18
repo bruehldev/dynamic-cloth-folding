@@ -14,6 +14,24 @@ from env.cloth_bullet.deformable_cloth import DeformableCloth
 from env.cloth_bullet.folding_task import FoldingTask
 from env.cloth_bullet.camera import Camera
 import albumentations as A
+#utils/mujoco_model_kwargs.py
+from utils import mujoco_model_kwargs as mjk
+
+import numpy as np
+
+def _rand(a, b): 
+    return float(np.random.uniform(a, b))
+
+def _sample_color_from_range(prefix: str):
+    r1 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_r_1"])
+    g1 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_g_1"])
+    b1 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_b_1"])
+    r2 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_r_2"])
+    g2 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_g_2"])
+    b2 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_b_2"])
+    # collapse the 2-tone MuJoCo texture into a flat Bullet color
+    return [(r1 + r2) / 2.0, (g1 + g2) / 2.0, (b1 + b2) / 2.0, 1.0]
+
 
 # optional logging
 try:
@@ -94,8 +112,7 @@ class BulletClothEnv_(object):
         )
 
         self.world = PyBulletWorld(self.has_viewer, self.timestep)
-        cam_fov = 60
-        self.camera = Camera(self.image_size, cam_fov, self.randomization_kwargs)
+        self.camera = Camera(self.image_size, self.randomization_kwargs)
         self.camera.albumentations_transform = self.albumentations_transform
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
 
@@ -128,21 +145,63 @@ class BulletClothEnv_(object):
 
     def reset(self):
         self.current_step = 0
+        self.episode_ee_close_steps = 0
         self.world.reset()
         self.world.apply_domain_randomization(self.randomization_kwargs)
 
-        # Create robot and cloth
-        self.robot = PandaRobot(base_position=[0, 0, 0], base_orientation=p.getQuaternionFromEuler([0, 0, 0]))
-        cloth_pos = [0.5, 0.0, self.world.get_table_top_z() + 0.05]
-        self.cloth = DeformableCloth(base_position=cloth_pos)
+        # Create robot
+        self.robot = PandaRobot(
+            base_position=[0, 0, 0],
+            base_orientation=p.getQuaternionFromEuler([0, 0, 0])
+        )
 
-        # Let cloth settle
+        # --- Robot dynamics DR (MuJoCo parity): sample once per episode ---
+        if self.randomization_kwargs.get("dynamics_randomization", False):
+            rob_cfg = self.randomization_kwargs.get("robot", {})
+            lin = float(np.random.uniform(*rob_cfg.get("linear_damping_range", [0.05, 0.20])))
+            ang = float(np.random.uniform(*rob_cfg.get("angular_damping_range", [0.05, 0.20])))
+            fr  = float(np.random.uniform(*rob_cfg.get("lateral_friction_range", [0.5, 1.2])))
+
+            # Apply to Bullet (per-link) and cache for get_obs()
+            if hasattr(self.robot, "randomize_dynamics"):
+                self.robot.randomize_dynamics(lin, ang, fr)
+            self.robot.joint_damping  = np.array([lin] * len(self.robot.arm_joint_indices), dtype=np.float32)
+            self.robot.joint_friction = np.array([fr]  * len(self.robot.arm_joint_indices), dtype=np.float32)
+
+        def _r(lo_hi, default):
+            return float(np.random.uniform(*(lo_hi or default)))
+
+        cloth_dr = self.randomization_kwargs.get("cloth", {})
+        self.cloth = DeformableCloth(
+            base_position=[0.5, 0.0, self.world.get_table_top_z() + 0.05],
+            scale=_r(cloth_dr.get("scale_range"), [0.14, 0.18]),
+            mass=_r(cloth_dr.get("mass_range"), [0.6, 1.2]),
+            springElasticStiffness=_r(cloth_dr.get("k_range"), [30, 80]),
+            springDampingStiffness=_r(cloth_dr.get("d_range"), [0.03, 0.30]),
+            frictionCoeff=_r(cloth_dr.get("friction_range"), [0.3, 1.0]),
+            useSelfCollision=int(cloth_dr.get("useSelfCollision", 0)),
+            useBendingSprings=1, useMassSpring=1, useFaceContact=1,
+        )
+
+        # === APPLY MUJOCO-STYLE MATERIALS ===
+        if self.randomization_kwargs.get("materials_randomization", False):
+            floor_rgba = _sample_color_from_range("floor")
+            table_rgba = _sample_color_from_range("table")
+            cloth_rgba = _sample_color_from_range("cloth")
+
+            self.world.set_floor_color(floor_rgba)
+            self.world.set_table_color(table_rgba)
+            self.cloth.set_color(cloth_rgba)
+
+        # Wait for cloth to settle
         for _ in range(60): self.world.step()
-        
-        # Set camera target and update debug view
-        self._fixed_camera_target = self.cloth.get_center_W()
+
+        # Set camera target to MuJoCo's lookatbody, not the table/cloth center
+        mujoco_lookatbody = np.array([0.494764, 0.006684, self.world.get_table_top_z()])
+        self._fixed_camera_target = mujoco_lookatbody
+        self.camera.begin_episode(self._fixed_camera_target)
         if self.has_viewer:
-            self.camera.set_debug_camera(self._fixed_camera_target, cam_type="default")
+            p.resetDebugVisualizerCamera(cameraDistance=1.2, cameraYaw=30, cameraPitch=-30, cameraTargetPosition=self._fixed_camera_target)
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
 
         # Initialize the task
@@ -166,8 +225,8 @@ class BulletClothEnv_(object):
             self.robot.reset_to_joint_positions(joint_positions)
             self.world.step()
 
-        # Anchor cloth to robot's hand
-        self.cloth.create_anchor(corner_v_name, self.robot.robot_id, self.robot.hand_link_index)
+        # Anchor cloth to robot's hand (using the correct ee_link_index)
+        self.cloth.create_anchor(corner_v_name, self.robot.robot_id, self.robot.ee_link_index)
 
         # Initialize state variables based on final EE position
         self.relative_origin = self.robot.get_ee_position_W()
@@ -188,6 +247,12 @@ class BulletClothEnv_(object):
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
             
+        # Randomize cloth color
+        if self.randomization_kwargs.get("materials_randomization", False):
+            lo = np.array(cloth_dr.get("color_lo", [0.3,0.5,1.0,1.0]))
+            hi = np.array(cloth_dr.get("color_hi", [1.0,1.0,1.0,1.0]))
+            p.changeVisualShape(self.cloth.cloth_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist())
+
         return self.get_obs()
 
     def step(self, action):
@@ -291,15 +356,38 @@ class BulletClothEnv_(object):
         cloth_obs = np.concatenate([np.array(list(cloth_pos_I.values())).flatten(), 
                                     np.array(list(cloth_vel_W.values())).flatten()])
         
+        # --- Physics DR scalars (MuJoCo parity) ---
+        physics_params = []
+        if self.randomization_kwargs.get("dynamics_randomization", False):
+            # safe fallbacks if something wasn't randomized this episode
+            g = float(getattr(self.world, "gravity", -9.81))
+            tab_mu = float(getattr(self.world, "table_lateral_friction", 0.8))
+            tab_e = float(getattr(self.world, "table_restitution", 0.1))
+            jd = float(np.mean(getattr(self.robot, "joint_damping", [0.1])))
+            jf = float(np.mean(getattr(self.robot, "joint_friction", [0.8])))
+
+            physics_params.extend([
+                g, tab_mu, tab_e,
+                float(self.cloth.frictionCoeff),
+                # If these attrs don't exist on your cloth wrapper, drop them or add getters:
+                float(getattr(self.cloth, "thickness", 0.002)),
+                float(getattr(self.cloth, "springElasticStiffness", 40.0)),
+                float(getattr(self.cloth, "springDampingStiffness", 0.1)),
+                jd, jf
+            ])
+            cloth_obs = np.concatenate([cloth_obs, np.array(physics_params, dtype=np.float32)])
+
         ee_pos_W = self.robot.get_ee_position_W()
         ee_vel_W = (ee_pos_W - self._prev_ee_pos_W) / max(self.timestep, 1e-6)
         self._prev_ee_pos_W = ee_pos_W
         ee_pos_I = ee_pos_W - self.relative_origin
 
+        # include desired ctrl in both modes; MuJoCo's "ee" obs has it too
+        desired_pos_ctrl_I = (self.desired_pos_ctrl_W - self.relative_origin)
+
         if self.robot_observation == "ee":
-            robot_obs = np.concatenate([ee_pos_I, ee_vel_W])
-        else: # "ctrl"
-            desired_pos_ctrl_I = (self.desired_pos_ctrl_W - self.relative_origin)
+            robot_obs = np.concatenate([ee_pos_I, ee_vel_W, desired_pos_ctrl_I])
+        else:  # "ctrl"
             robot_obs = np.concatenate([desired_pos_ctrl_I, ee_vel_W])
             
         image_stack = np.array(list(self.frame_stack)).flatten()

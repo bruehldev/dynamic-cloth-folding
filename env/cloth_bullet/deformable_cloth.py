@@ -1,11 +1,9 @@
+# deformable_cloth.py
+
 import pybullet as p
 import numpy as np
 
-class DeformableCloth:
-    """
-    Manages the soft-body cloth, including loading, state tracking (positions, velocities),
-    and identifying key features like corners and sites.
-    """
+class DeformableCloth(object):
     def __init__(self, base_position, scale=0.15, mass=1.0, **kwargs):
         self.cloth_id = p.loadSoftBody(
             "cloth_z_up.obj",
@@ -23,6 +21,15 @@ class DeformableCloth:
             useFaceContact=kwargs.get("useFaceContact", 1)
         )
         p.changeVisualShape(self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1])
+
+        # cache episode parameters for DR/obs parity with MuJoCo
+        self.scale = float(scale)
+        self.mass = float(mass)
+        self.springElasticStiffness = float(kwargs.get("springElasticStiffness", 40))
+        self.springDampingStiffness = float(kwargs.get("springDampingStiffness", 0.1))
+        self.frictionCoeff = float(kwargs.get("frictionCoeff", 0.5))
+        # Not exposed by PyBullet for soft bodies; keep for reporting parity only
+        self.thickness = float(kwargs.get("thickness", 0.002))
 
         self._prev_verts_W = self.get_raw_vertex_positions()
         self.find_corners()
@@ -90,3 +97,7 @@ class DeformableCloth:
         """Creates a soft body anchor between a cloth vertex and a robot link."""
         vertex_index = int(vertex_name.split('_')[1])
         p.createSoftBodyAnchor(self.cloth_id, vertex_index, robot_id, link_id, [0, 0, 0])
+
+    def set_color(self, rgba):
+        self.color = list(map(float, rgba))  # cache for logging/obs if you want
+        p.changeVisualShape(self.cloth_id, -1, rgbaColor=self.color)

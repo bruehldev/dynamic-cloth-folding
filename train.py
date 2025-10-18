@@ -225,6 +225,9 @@ def experiment(variant):
     if BACKEND == 'bullet' and os.getenv('WITH_GUI', '0') == '1':
         env_kwargs['has_viewer'] = True
     env_kwargs['logger'] = runlog
+
+    variant.setdefault('randomization_kwargs', {})['render_size'] = [320, 240]  # W_render, H_render
+
     eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
     print("PHYSICS backend:", getattr(eval_env, "_backend_name", "unknown"),
           "| class:", type(eval_env).__name__)

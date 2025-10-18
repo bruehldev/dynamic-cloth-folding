@@ -169,11 +169,24 @@ class PandaRobot:
             if abs(p.getJointState(self.robot_id, j)[0] - self.finger_closed_pos) > 1e-5:
                 p.resetJointState(self.robot_id, j, self.finger_closed_pos, 0.0)
 
-    def randomize_dynamics(self, link_lin_damp, link_ang_damp, link_friction):
-        for j in range(p.getNumJoints(self.robot_id)):
+    def randomize_dynamics(self, linear_damp: float, angular_damp: float, lateral_friction: float):
+        """
+        Apply simple per-link damping and contact friction to approximate MuJoCo
+        dynamics randomization for the manipulator.
+        """
+        # Arm links
+        for j in self.arm_joint_indices:
             p.changeDynamics(self.robot_id, j,
-                linearDamping=link_lin_damp, angularDamping=link_ang_damp,
-                lateralFriction=link_friction)
+                             linearDamping=float(linear_damp),
+                             angularDamping=float(angular_damp),
+                             lateralFriction=float(lateral_friction))
+        # Hand/EE (if present)
+        for maybe in [self.hand_link_index, self.ee_link_index]:
+            if maybe is not None and maybe >= 0:
+                p.changeDynamics(self.robot_id, int(maybe),
+                                 linearDamping=float(linear_damp),
+                                 angularDamping=float(angular_damp),
+                                 lateralFriction=float(lateral_friction))
 
     def set_initial_joint_positions(self):
         initial_qpos = np.array(
