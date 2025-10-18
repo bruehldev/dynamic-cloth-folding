@@ -72,33 +72,80 @@ class PyBulletWorld(object):
             p.changeVisualShape(self.plane_id, -1, rgbaColor=list(map(float, rgba)))
 
     def apply_domain_randomization(self, dr):
+        # allow None
+        dr = dr or {}
         if self.plane_id is None or self.table_id is None:
             return
 
-        # Table color + dynamics
+        # ---- Table color + dynamics ----
         tab = dr.get("table", {})
         if tab:
-            lo, hi = np.array(tab.get("color_lo", [0.8,0.8,0.8,1.0])), np.array(tab.get("color_hi", [1.0,1.0,1.0,1.0]))
-            p.changeVisualShape(self.table_id, -1, rgbaColor=np.random.uniform(lo, hi).tolist())
+            lo = np.array(tab.get("color_lo", [0.8, 0.8, 0.8, 1.0]), dtype=float)
+            hi = np.array(tab.get("color_hi", [1.0, 1.0, 1.0, 1.0]), dtype=float)
+            rgba = np.random.uniform(lo, hi).tolist()
+            p.changeVisualShape(self.table_id, -1, rgbaColor=rgba)
 
-            lat_lo, lat_hi = tab.get("lateral_friction_range", [self.table_lateral_friction, self.table_lateral_friction])
-            res_lo, res_hi = tab.get("restitution_range", [self.table_restitution, self.table_restitution])
+            lat_lo, lat_hi = tab.get("lateral_friction_range", [self.table_lateral_friction,
+                                                                self.table_lateral_friction])
+            res_lo, res_hi = tab.get("restitution_range", [self.table_restitution,
+                                                           self.table_restitution])
             self.table_lateral_friction = float(np.random.uniform(lat_lo, lat_hi))
             self.table_restitution = float(np.random.uniform(res_lo, res_hi))
             p.changeDynamics(self.table_id, -1,
                              lateralFriction=self.table_lateral_friction,
                              restitution=self.table_restitution)
 
-        # Floor color
+        # ---- Floor color (optional) ----
         flo = dr.get("floor", {})
         if flo:
-            lo, hi = np.array(flo.get("color_lo", [0.2,0.2,0.2,1.0])), np.array(flo.get("color_hi", [0.9,0.9,0.9,1.0]))
-            p.changeVisualShape(self.plane_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist())
+            lo = np.array(flo.get("color_lo", [0.2, 0.2, 0.2, 1.0]), dtype=float)
+            hi = np.array(flo.get("color_hi", [0.9, 0.9, 0.9, 1.0]), dtype=float)
+            rgba = np.random.uniform(lo, hi).tolist()
+            p.changeVisualShape(self.plane_id, -1, rgbaColor=rgba)
 
-        # Gravity DR
+        # ---- Gravity DR (vector) ----
         if dr.get("gravity_randomization", False):
-            g0, g1 = np.array(dr.get("gravity_range", [[0,0,-9.81],[0,0,-9.81]]), dtype=float)
-            g = np.random.uniform(g0, g1)  # vector sample
-            self.gravity_vec = np.array(g, dtype=float)
+            # Expect a 2x3 range for vector sampling; fall back to default -9.81 z
+            g_range = dr.get("gravity_range", [[0.0, 0.0, -9.81], [0.0, 0.0, -9.81]])
+            g0 = np.array(g_range[0], dtype=float)
+            g1 = np.array(g_range[1], dtype=float)
+            # elementwise uniform sample between the two vectors
+            g = np.random.uniform(g0, g1)
+            self.gravity_vec = g.astype(float)
             self.gravity = float(self.gravity_vec[2])
-            p.setGravity(*self.gravity_vec)
+            p.setGravity(float(self.gravity_vec[0]),
+                         float(self.gravity_vec[1]),
+                         float(self.gravity_vec[2]))
+
+        # --- Physics / solver knobs (MuJoCo solref/solimp analogs) ---
+        # Be defensive: different pybullet builds expose different parameter names.
+        phys = dr.get("physics", {})
+        params = {
+            # widely supported
+            "erp": float(np.random.uniform(*phys.get("erp_range", [0.1, 0.4]))),
+            "contactERP": float(np.random.uniform(*phys.get("contact_erp_range", [0.1, 0.4]))),
+            "numSolverIterations": int(np.random.uniform(*phys.get("solver_iters_range", [50, 150]))),
+            # often available (best-effort; safe to ignore if missing)
+            "globalCFM": float(np.random.uniform(*phys.get("global_cfm_range", [0.0, 1e-3]))),
+            "solverResidualThreshold": float(np.random.uniform(*phys.get("residual_thresh_range", [1e-7, 1e-3]))),
+            "restitutionVelocityThreshold": float(np.random.uniform(*phys.get("restitution_vel_thresh_range", [0.0, 1.0]))),
+            "contactBreakingThreshold": float(np.random.uniform(*phys.get("contact_breaking_threshold_range", [0.01, 0.1]))),
+        }
+        for k, v in params.items():
+            try:
+                p.setPhysicsEngineParameter(**{k: v})
+            except TypeError:
+                # Parameter not supported in this build; skip gracefully
+                pass
+            except Exception:
+                # Any other runtime issue (e.g., wrong value range); also skip
+                pass
+
+        # Optional: small visual variability for the plane as a stand-in for material flips
+        try:
+            plane_rgba = (np.random.uniform(0.6, 0.95, size=4)).tolist()
+            plane_rgba[-1] = 1.0
+            if self.plane_id is not None:
+                p.changeVisualShape(self.plane_id, -1, rgbaColor=plane_rgba)
+        except Exception:
+            pass

@@ -44,20 +44,27 @@ class Camera:
         else:
             self._episode_fov = (fmin + fmax) / 2
 
+        # Freeze look-at for the whole episode
         center = np.array(center_w, dtype=float)
         if self.randomization_kwargs.get("lookat_position_randomization", False):
             r = float(self.randomization_kwargs.get("lookat_position_randomization_radius", 0.0))
             center = center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
         self._episode_center = center
 
+        # Pick camera type once per episode (support "all")
         cam_type = cfg.get("type", "default")
+        if cam_type == "all":
+            cam_type = np.random.choice(["default", "side", "front", "up"])
         eye, up = self._get_eye_from_type(center, cam_type)
+
+        # Freeze eye jitter once per episode
         if self.randomization_kwargs.get("camera_position_randomization", False):
             jx, jy, jz = cfg.get("jitter_xyz", [0.0, 0.0, 0.0])
             eye = np.array(eye) + [np.random.uniform(-jx, jx),
                                    np.random.uniform(-jy, jy),
                                    np.random.uniform(-jz, jz)]
-        self._episode_eye = eye.tolist()
+        self._episode_eye = np.array(eye, dtype=float).tolist()
+        self._episode_up = [0.0, 0.0, 1.0]
 
     def _get_eye_from_type(self, center_w, cam_type):
         """Returns eye position and up vector based on camera type."""
@@ -75,13 +82,15 @@ class Camera:
         return eye.tolist(), up
 
     def get_view_projection_matrices(self, _center_w_unused):
-        # Use frozen episode params
-        center_w = self._episode_center.tolist()
-        eye = self._episode_eye
-        up = [0.0, 0.0, 1.0]
-        fov = self._episode_fov
-        aspect = self.image_size[0] / self.image_size[1]
-        view_matrix = p.computeViewMatrix(eye, center_w, up)
+        # Use frozen episode parameters
+        center_w = np.array(self._episode_center, dtype=float)
+        eye = np.array(self._episode_eye, dtype=float)
+        up = getattr(self, "_episode_up", [0.0, 0.0, 1.0])
+        fov = getattr(self, "_episode_fov", self.randomization_kwargs.get("camera_config", {}).get("train_camera_fovy", 60))
+
+        # Match projection to the render buffer to avoid stretching
+        aspect = self.render_size[0] / self.render_size[1]
+        view_matrix = p.computeViewMatrix(eye.tolist(), center_w.tolist(), up)
         proj_matrix = p.computeProjectionMatrixFOV(fov, aspect, 0.01, 5.0)
         return view_matrix, proj_matrix
 

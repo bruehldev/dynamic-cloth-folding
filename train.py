@@ -17,6 +17,11 @@ else:
 def _maybe_randomize(wrapped_env, randomization_kwargs):
     if SKIP_DR:
         return wrapped_env
+    # MuJoCo-only: robosuite wrapper requires env.sim
+    backend = getattr(wrapped_env, "_backend_name", "").lower()
+    if backend in {"bullet", "pybullet"} or not hasattr(wrapped_env, "sim"):
+        # Bullet has its own DR via randomization_kwargs already
+        return wrapped_env
     from utils import general_utils
     return general_utils.get_randomized_env(wrapped_env, randomization_kwargs=randomization_kwargs)
 
@@ -226,7 +231,34 @@ def experiment(variant):
         env_kwargs['has_viewer'] = True
     env_kwargs['logger'] = runlog
 
-    variant.setdefault('randomization_kwargs', {})['render_size'] = [320, 240]  # W_render, H_render
+    # DR config (render size + cloth size randomization)
+    rk = variant.setdefault('randomization_kwargs', {})
+    rk['render_size'] = [320, 240]  # W_render, H_render
+    rk['cloth_size_range'] = [0.10, 0.20]
+    rk['table'] = {
+        "color_lo": [0.55, 0.45, 0.35, 1.0],
+        "color_hi": [0.95, 0.90, 0.85, 1.0],
+        "lateral_friction_range": [0.5, 1.2],
+        "restitution_range": [0.0, 0.2],
+    }
+    rk['floor'] = {
+        "color_lo": [0.25, 0.25, 0.25, 1.0],
+        "color_hi": [0.85, 0.85, 0.85, 1.0],
+    }
+    rk['dynamics_randomization'] = True
+    rk['physics'] = {
+        "erp_range": [0.15, 0.35],
+        "contact_erp_range": [0.15, 0.35],
+        "global_cfm_range": [0.0, 1e-3],
+        "solver_iters_range": [80, 140],
+        "residual_thresh_range": [1e-6, 1e-4],
+        "restitution_vel_thresh_range": [0.0, 0.5],
+        "contact_breaking_threshold_range": [0.02, 0.08],
+    }
+    rk['gravity_randomization'] = True
+    rk['gravity_range'] = [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]]
+    # Master switch for Bullet DR (default ON). Override with: BULLET_DR=0 python train.py ...
+    rk.setdefault('enable_dr', os.getenv('BULLET_DR', '1') == '1')
 
     eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
     print("PHYSICS backend:", getattr(eval_env, "_backend_name", "unknown"),

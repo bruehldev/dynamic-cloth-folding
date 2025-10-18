@@ -17,8 +17,6 @@ import albumentations as A
 #utils/mujoco_model_kwargs.py
 from utils import mujoco_model_kwargs as mjk
 
-import numpy as np
-
 def _rand(a, b): 
     return float(np.random.uniform(a, b))
 
@@ -147,51 +145,74 @@ class BulletClothEnv_(object):
         self.current_step = 0
         self.episode_ee_close_steps = 0
         self.world.reset()
-        self.world.apply_domain_randomization(self.randomization_kwargs)
+        enable_dr = (self.randomization_kwargs or {}).get("enable_dr", True)
+        if enable_dr:
+            self.world.apply_domain_randomization(self.randomization_kwargs)
 
-        # Create robot
-        self.robot = PandaRobot(
-            base_position=[0, 0, 0],
-            base_orientation=p.getQuaternionFromEuler([0, 0, 0])
+        # Create robot and cloth
+        self.robot = PandaRobot(base_position=[0, 0, 0], base_orientation=p.getQuaternionFromEuler([0, 0, 0]))
+        # Robot dynamics DR (only if master switch is ON)
+        if enable_dr and (self.randomization_kwargs or {}).get("dynamics_randomization", False):
+            rob_cfg = (self.randomization_kwargs or {}).get("robot", {})
+            _lin = float(np.random.uniform(*rob_cfg.get("lin_damping_range", [0.0, 0.2])))
+            _ang = float(np.random.uniform(*rob_cfg.get("ang_damping_range", [0.0, 0.2])))
+            _frc = float(np.random.uniform(*rob_cfg.get("lateral_friction_range", [0.6, 1.2])))
+            # Prefer the PandaRobot helper if present; call positionally for max compatibility.
+            try:
+                if hasattr(self.robot, "randomize_dynamics"):
+                    self.robot.randomize_dynamics(_lin, _ang, _frc)
+                else:
+                    raise AttributeError("no helper")
+            except (TypeError, AttributeError):
+                # Fallback: apply dynamics directly per joint/link
+                for j in range(p.getNumJoints(self.robot.robot_id)):
+                    p.changeDynamics(self.robot.robot_id, j,
+                                     linearDamping=_lin, angularDamping=_ang,
+                                     lateralFriction=_frc)
+        cloth_pos = [0.5, 0.0, self.world.get_table_top_z() + 0.05]
+
+        # ---- Cloth domain randomization (physics + size + optional color) ----
+        cloth_cfg = (self.randomization_kwargs or {}).get("cloth", {})
+
+        # --- Cloth size: random if DR enabled, else deterministic ---
+        if enable_dr:
+            # Priority: cloth.scale_range -> global cloth_size_range -> fallback
+            sr = cloth_cfg.get("scale_range", None)
+            if sr is None:
+                sr = (self.randomization_kwargs or {}).get("cloth_size_range", None)
+            if sr is not None:
+                lo, hi = float(sr[0]), float(sr[1])
+                scale_guess = float(np.random.uniform(lo, hi))
+            else:
+                scale_guess = float(np.random.uniform(0.20, 0.33))
+        else:
+            # Deterministic: prefer explicit cloth.scale, else global cloth_size, else a stable default
+            scale_guess = float(cloth_cfg.get("scale",
+                               (self.randomization_kwargs or {}).get("cloth_size", 0.26)))
+
+        # Clamp to keep Bullet stable
+        scale_guess = float(np.clip(scale_guess, 0.10, 0.38))
+
+        # Spawn a bit higher for larger cloth to avoid initial interpenetration
+        base_clearance = 0.05
+        extra_clearance = max(0.0, (scale_guess - 0.26)) * 0.35  # gentle slope
+        cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
+
+        cloth_kwargs = dict(
+            scale=scale_guess,
+            mass=float(cloth_cfg.get("mass", 0.35)),
+            useNeoHookean=int(cloth_cfg.get("useNeoHookean", 0)),
+            useBendingSprings=int(cloth_cfg.get("useBendingSprings", 1)),
+            useMassSpring=int(cloth_cfg.get("useMassSpring", 1)),
+            springElasticStiffness=float(np.random.uniform(*cloth_cfg.get("spring_k_range", [30.0, 80.0]))),
+            springDampingStiffness=float(np.random.uniform(*cloth_cfg.get("spring_c_range", [0.05, 0.2]))),
+            springDampingAllDirections=int(cloth_cfg.get("damping_all_dirs", 1)),
+            useSelfCollision=int(cloth_cfg.get("useSelfCollision", 1)),
+            frictionCoeff=float(np.random.uniform(*cloth_cfg.get("friction_range", [0.3, 1.0]))),
+            useFaceContact=int(cloth_cfg.get("useFaceContact", 1)),
         )
-
-        # --- Robot dynamics DR (MuJoCo parity): sample once per episode ---
-        if self.randomization_kwargs.get("dynamics_randomization", False):
-            rob_cfg = self.randomization_kwargs.get("robot", {})
-            lin = float(np.random.uniform(*rob_cfg.get("linear_damping_range", [0.05, 0.20])))
-            ang = float(np.random.uniform(*rob_cfg.get("angular_damping_range", [0.05, 0.20])))
-            fr  = float(np.random.uniform(*rob_cfg.get("lateral_friction_range", [0.5, 1.2])))
-
-            # Apply to Bullet (per-link) and cache for get_obs()
-            if hasattr(self.robot, "randomize_dynamics"):
-                self.robot.randomize_dynamics(lin, ang, fr)
-            self.robot.joint_damping  = np.array([lin] * len(self.robot.arm_joint_indices), dtype=np.float32)
-            self.robot.joint_friction = np.array([fr]  * len(self.robot.arm_joint_indices), dtype=np.float32)
-
-        def _r(lo_hi, default):
-            return float(np.random.uniform(*(lo_hi or default)))
-
-        cloth_dr = self.randomization_kwargs.get("cloth", {})
-        self.cloth = DeformableCloth(
-            base_position=[0.5, 0.0, self.world.get_table_top_z() + 0.05],
-            scale=_r(cloth_dr.get("scale_range"), [0.14, 0.18]),
-            mass=_r(cloth_dr.get("mass_range"), [0.6, 1.2]),
-            springElasticStiffness=_r(cloth_dr.get("k_range"), [30, 80]),
-            springDampingStiffness=_r(cloth_dr.get("d_range"), [0.03, 0.30]),
-            frictionCoeff=_r(cloth_dr.get("friction_range"), [0.3, 1.0]),
-            useSelfCollision=int(cloth_dr.get("useSelfCollision", 0)),
-            useBendingSprings=1, useMassSpring=1, useFaceContact=1,
-        )
-
-        # === APPLY MUJOCO-STYLE MATERIALS ===
-        if self.randomization_kwargs.get("materials_randomization", False):
-            floor_rgba = _sample_color_from_range("floor")
-            table_rgba = _sample_color_from_range("table")
-            cloth_rgba = _sample_color_from_range("cloth")
-
-            self.world.set_floor_color(floor_rgba)
-            self.world.set_table_color(table_rgba)
-            self.cloth.set_color(cloth_rgba)
+        # No target_edge_length yet (DeformableCloth ignores it in current code)
+        self.cloth = DeformableCloth(base_position=cloth_pos, **cloth_kwargs)
 
         # Wait for cloth to settle
         for _ in range(60): self.world.step()
@@ -247,10 +268,10 @@ class BulletClothEnv_(object):
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
             
-        # Randomize cloth color
-        if self.randomization_kwargs.get("materials_randomization", False):
-            lo = np.array(cloth_dr.get("color_lo", [0.3,0.5,1.0,1.0]))
-            hi = np.array(cloth_dr.get("color_hi", [1.0,1.0,1.0,1.0]))
+        # Randomize cloth color (only if DR enabled)
+        if enable_dr and self.randomization_kwargs.get("materials_randomization", False):
+            lo = np.array(cloth_cfg.get("color_lo", [0.3,0.5,1.0,1.0]))
+            hi = np.array(cloth_cfg.get("color_hi", [1.0,1.0,1.0,1.0]))
             p.changeVisualShape(self.cloth.cloth_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist())
 
         return self.get_obs()

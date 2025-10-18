@@ -4,26 +4,56 @@ import pybullet as p
 import numpy as np
 
 class DeformableCloth(object):
-    def __init__(self, base_position, scale=0.15, mass=1.0, **kwargs):
-        self.cloth_id = p.loadSoftBody(
-            "cloth_z_up.obj",
-            basePosition=base_position,
-            scale=scale,
-            mass=mass,
-            useNeoHookean=kwargs.get("useNeoHookean", 0),
-            useBendingSprings=kwargs.get("useBendingSprings", 1),
-            useMassSpring=kwargs.get("useMassSpring", 1),
-            springElasticStiffness=kwargs.get("springElasticStiffness", 40),
-            springDampingStiffness=kwargs.get("springDampingStiffness", 0.1),
-            springDampingAllDirections=kwargs.get("springDampingAllDirections", 1),
-            useSelfCollision=kwargs.get("useSelfCollision", 0),
-            frictionCoeff=kwargs.get("frictionCoeff", 0.5),
-            useFaceContact=kwargs.get("useFaceContact", 1)
-        )
+    def __init__(self, base_position, scale=0.15, mass=1.0, target_edge_length=None, **kwargs):
+        """
+        If target_edge_length is given (meters), the cloth is scaled so that
+        its XY edge length matches target_edge_length (MuJoCo's cloth_size).
+        """
+        def _load(scale_val):
+            return p.loadSoftBody(
+                "cloth_z_up.obj",
+                basePosition=base_position,
+                scale=scale_val,
+                mass=mass,
+                useNeoHookean=kwargs.get("useNeoHookean", 0),
+                useBendingSprings=kwargs.get("useBendingSprings", 1),
+                useMassSpring=kwargs.get("useMassSpring", 1),
+                springElasticStiffness=kwargs.get("springElasticStiffness", 40.0),
+                springDampingStiffness=kwargs.get("springDampingStiffness", 0.1),
+                springDampingAllDirections=kwargs.get("springDampingAllDirections", 1),
+                useSelfCollision=kwargs.get("useSelfCollision", 1),
+                frictionCoeff=kwargs.get("frictionCoeff", 0.8),
+                useFaceContact=kwargs.get("useFaceContact", 1),
+            )
+
+        # If no target size is requested, load once with the given scale.
+        if target_edge_length is None:
+            self.cloth_id = _load(scale)
+            used_scale = float(scale)
+        else:
+            # Stage 1: load at a provisional scale to measure XY span
+            _temp_id = _load(scale if scale is not None else 1.0)
+            try:
+                aabb_min, aabb_max = p.getAABB(_temp_id)
+                span_x = aabb_max[0] - aabb_min[0]
+                span_y = aabb_max[1] - aabb_min[1]
+                current_edge = max(span_x, span_y)
+                # Defensive clamp to avoid division by zero
+                current_edge = current_edge if current_edge > 1e-6 else 1e-6
+                desired_scale = (float(target_edge_length) / current_edge) * (scale if scale is not None else 1.0)
+            finally:
+                try:
+                    p.removeBody(_temp_id)
+                except Exception:
+                    pass
+            # Stage 2: reload with the exact scale
+            self.cloth_id = _load(desired_scale)
+            used_scale = float(desired_scale)
+
         p.changeVisualShape(self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1])
 
         # cache episode parameters for DR/obs parity with MuJoCo
-        self.scale = float(scale)
+        self.scale = used_scale
         self.mass = float(mass)
         self.springElasticStiffness = float(kwargs.get("springElasticStiffness", 40))
         self.springDampingStiffness = float(kwargs.get("springDampingStiffness", 0.1))
