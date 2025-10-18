@@ -10,18 +10,9 @@ class Camera:
         self.image_size = image_size
         self.fov = fov
         self.randomization_kwargs = randomization_kwargs
+        self.albumentations_transform = None
 
-    def get_view_projection_matrices(self, center_w):
-        """Computes view and projection matrices for rendering."""
-        cam_type = "default"
-        eye, up = self._get_eye_from_type(center_w, cam_type)
-        aspect = float(self.image_size[0]) / max(1.0, float(self.image_size[1]))
-        view_matrix = p.computeViewMatrix(eye, center_w.tolist(), up)
-        proj_matrix = p.computeProjectionMatrixFOV(self.fov, aspect, 0.01, 2.0)
-        return view_matrix, proj_matrix
-
-
-    def _get_eye_from_type(self, center, cam_type):
+    def _get_eye_from_type(self, center_w, cam_type):
         """
         Calculates the camera's eye position based on its type, with ENV var overrides.
         Returns: tuple (eye_position_list, up_vector_list)
@@ -44,13 +35,43 @@ class Camera:
             up = [0.0, 0.0, 1.0]
             dx, dy, dz = -1.0, -1.0, 1.00
 
-        eye = center + np.array([dx, dy, dz], dtype=np.float32)
+        eye = center_w + np.array([dx, dy, dz], dtype=np.float32)
         return eye.tolist(), up
 
+    def get_view_projection_matrices(self, center_w):
+        cfg = self.randomization_kwargs.get("camera_config", {})
+        # cam type: "all" -> random pick
+        cam_type = cfg.get("type", "default")
+        if cam_type == "all":
+            cam_type = np.random.choice(["default", "side", "front", "up"])
+
+        eye, up = self._get_eye_from_type(center_w, cam_type)
+
+        # small pose jitter
+        jx, jy, jz = cfg.get("jitter_xyz", [0.0, 0.0, 0.0])
+        eye = (np.array(eye) + np.array([
+            np.random.uniform(-jx, jx),
+            np.random.uniform(-jy, jy),
+            np.random.uniform(-jz, jz)])).tolist()
+
+        # fovy range
+        fovy_range = cfg.get("fovy_range", [self.fov, self.fov])
+        self.fov = float(np.random.uniform(*fovy_range))
+
+        aspect = float(self.image_size[0]) / max(1.0, float(self.image_size[1]))
+        view_matrix = p.computeViewMatrix(eye, center_w.tolist(), up)
+        proj_matrix = p.computeProjectionMatrixFOV(self.fov, aspect, 0.01, 5.0) # Increased far plane
+        return view_matrix, proj_matrix
+
     def capture_image(self, center_w):
+        view_matrix, proj_matrix = self.get_view_projection_matrices(center_w)
         W, H = self.image_size
-        view, proj = self.get_view_projection_matrices(center_w)
-        _, _, rgba, _, _ = p.getCameraImage(W, H, view, proj, renderer=p.ER_BULLET_HARDWARE_OPENGL)
+
+        # Pick renderer based on connection method
+        conn = p.getConnectionInfo().get('connectionMethod', p.DIRECT)
+        renderer = p.ER_BULLET_HARDWARE_OPENGL if conn == p.GUI else p.ER_TINY_RENDERER
+
+        _, _, rgba, _, _ = p.getCameraImage(W, H, view_matrix, proj_matrix, renderer=renderer)
         img = np.reshape(rgba, (H, W, 4))[:, :, :3].astype("uint8")
         
         # Center crop to the final image_size

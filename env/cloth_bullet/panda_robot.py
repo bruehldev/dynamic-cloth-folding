@@ -14,8 +14,8 @@ class PandaRobot:
         self._find_links_and_joints()
         self._get_joint_limits()
         self._setup_finger_control()
+        self.set_initial_joint_positions()
         self.weld_fingers_shut()
-        self.reset_to_neutral()
 
     def _find_links_and_joints(self):
         """Finds and stores important link and joint indices from the URDF."""
@@ -52,24 +52,32 @@ class PandaRobot:
             self.ee_link_index = self.arm_joint_indices[-1] + 1
 
     def _get_joint_limits(self):
-        """Queries and stores joint limits and default forces."""
-        self.joint_lower_limits, self.joint_upper_limits = [], []
+        """
+        Queries and stores the joint limits (range, rest poses) for the arm.
+        """
+        self.joint_limits_lower = []
+        self.joint_limits_upper = []
+        self.joint_ranges = []
+        self.joint_rest_poses = []
         self.joint_max_forces = []
-        for j in self.arm_joint_indices:
-            ji = p.getJointInfo(self.robot_id, j)
-            lo, hi = float(ji[8]), float(ji[9])
-            self.joint_lower_limits.append(lo if lo > -1e10 else -3.14)
-            self.joint_upper_limits.append(hi if hi < 1e10 else 3.14)
-            self.joint_max_forces.append(200.0)
-        self.joint_ranges = [u - l for u, l in zip(self.joint_upper_limits, self.joint_lower_limits)]
-        self.joint_rest_poses = [0.0] * len(self.arm_joint_indices)
+
+        for i in self.arm_joint_indices:
+            info = p.getJointInfo(self.robot_id, i)
+            self.joint_limits_lower.append(info[8])
+            self.joint_limits_upper.append(info[9])
+            self.joint_ranges.append(info[9] - info[8])
+            self.joint_max_forces.append(info[10])
+            # Simple midpoint rest pose
+            self.joint_rest_poses.append((info[8] + info[9]) / 2)
 
     def _setup_finger_control(self):
-        """Sets parameters for controlling the gripper fingers from environment variables."""
+        """
+        Sets up motor control for the robot's fingers and welds them shut.
+        """
         self.finger_closed_pos = 0.0
-        self.finger_max_force = float(os.getenv("FINGER_FORCE", 200))
-        self.finger_kp = float(os.getenv("FINGER_KP", 1.0))
-        self.finger_max_vel = float(os.getenv("FINGER_MAX_VEL", 2.0))
+        self.finger_max_force = 200.0 # Default strong force
+        self.finger_kp = 1.0 # Default position gain
+        self.finger_max_vel = 2.0 # Default max velocity
 
     def weld_fingers_shut(self):
         """Creates fixed constraints to weld the fingers to the hand, ensuring a rigid grip."""
@@ -88,7 +96,9 @@ class PandaRobot:
                 p.changeConstraint(cid, maxForce=self.finger_max_force)
 
     def reset_to_neutral(self):
-        """Resets arm joints to a neutral pose and applies damping."""
+        """
+        Resets the robot's arm joints to a neutral pose (all zeros).
+        """
         for j in self.arm_joint_indices:
             p.resetJointState(self.robot_id, j, 0.0, 0.0)
             p.changeDynamics(self.robot_id, j, linearDamping=0.1, angularDamping=0.1)
@@ -98,12 +108,17 @@ class PandaRobot:
             p.setJointMotorControl2(self.robot_id, j, p.VELOCITY_CONTROL, force=0.0)
 
     def reset_to_joint_positions(self, joint_positions):
-        """Resets arm joints to a specific configuration."""
+        """
+        Resets the robot's arm joints to the specified positions.
+        """
         for i, joint_index in enumerate(self.arm_joint_indices):
             p.resetJointState(self.robot_id, joint_index, joint_positions[i])
 
     def get_ee_position_W(self):
-        """Returns the end-effector position in world coordinates."""
+        """
+        Returns the end-effector position in world coordinates.
+        This should use the IK target link for consistency.
+        """
         ls = p.getLinkState(self.robot_id, self.ee_link_index, computeForwardKinematics=True)
         return np.array(ls[4])
 
@@ -116,15 +131,27 @@ class PandaRobot:
         return np.array([p.getJointState(self.robot_id, j)[1] for j in self.arm_joint_indices])
 
     def calculate_ik(self, target_pos):
-        """Calculates inverse kinematics for a target position."""
+        """
+        Calculates the joint positions needed to reach a target end-effector position.
+        This must use the ee_link_index (grasptarget) to move the point between
+        the fingers to the target.
+        """
         return p.calculateInverseKinematics(
-            self.robot_id, self.ee_link_index, target_pos,
-            lowerLimits=self.joint_lower_limits, upperLimits=self.joint_upper_limits,
-            jointRanges=self.joint_ranges, restPoses=self.joint_rest_poses
+            self.robot_id,
+            self.ee_link_index,
+            target_pos,
+            lowerLimits=self.joint_limits_lower,
+            upperLimits=self.joint_limits_upper,
+            jointRanges=self.joint_ranges,
+            restPoses=self.joint_rest_poses,
+            maxNumIterations=100,
+            residualThreshold=1e-5,
         )
 
     def apply_joint_positions(self, joint_positions):
-        """Applies target positions to the arm joints using a position controller."""
+        """
+        Applies target joint positions to the robot's arm controllers.
+        """
         p.setJointMotorControlArray(
             self.robot_id, self.arm_joint_indices[:7], p.POSITION_CONTROL,
             targetPositions=joint_positions[:7], forces=self.joint_max_forces[:7]
@@ -141,3 +168,16 @@ class PandaRobot:
             # Safety check to snap back if drifted
             if abs(p.getJointState(self.robot_id, j)[0] - self.finger_closed_pos) > 1e-5:
                 p.resetJointState(self.robot_id, j, self.finger_closed_pos, 0.0)
+
+    def randomize_dynamics(self, link_lin_damp, link_ang_damp, link_friction):
+        for j in range(p.getNumJoints(self.robot_id)):
+            p.changeDynamics(self.robot_id, j,
+                linearDamping=link_lin_damp, angularDamping=link_ang_damp,
+                lateralFriction=link_friction)
+
+    def set_initial_joint_positions(self):
+        initial_qpos = np.array(
+            [0.212422, 0.362907, -0.00733391, -1.9649, -0.0198034, 2.37451, -1.50499])
+        # Apply it
+        for i, j in enumerate(self.arm_joint_indices[:len(initial_qpos)]):
+            p.resetJointState(self.robot_id, j, float(initial_qpos[i]), 0.0)

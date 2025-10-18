@@ -1,17 +1,19 @@
-import os
 import numpy as np
 import gym
 from gym.utils import seeding
 from collections import deque
 from typing import Optional
 from multiprocessing import current_process
+import psutil
+import os
 
 # Refactored components
-from .pybullet_world import PybulletWorld
-from .panda_robot import PandaRobot
-from .deformable_cloth import DeformableCloth
-from .camera import Camera
-from .folding_task import FoldingTask
+from env.cloth_bullet.pybullet_world import PyBulletWorld
+from env.cloth_bullet.panda_robot import PandaRobot
+from env.cloth_bullet.deformable_cloth import DeformableCloth
+from env.cloth_bullet.folding_task import FoldingTask
+from env.cloth_bullet.camera import Camera
+import albumentations as A
 
 # optional logging
 try:
@@ -21,7 +23,6 @@ except Exception:
 
 try:
     import pybullet as p
-    import psutil
 except Exception as e:
     p = None
     _IMPORT_ERR = e
@@ -37,20 +38,27 @@ class BulletClothEnv_(object):
     def __init__(
         self,
         timestep, sparse_dense, success_distance, goal_noise_range, frame_stack_size,
-        output_max, success_reward, fail_reward, extra_reward, kp, damping_ratio,
-        control_frequency, ctrl_filter, save_folder, randomization_kwargs,
-        robot_observation, max_close_steps, model_kwargs_path,
+        output_max, success_reward, fail_reward, extra_reward,
+        control_frequency, save_folder, randomization_kwargs,
+        robot_observation, max_close_steps, task_name="sideways",
         image_obs_noise_mean=1, image_obs_noise_std=0, has_viewer=False,
         image_size=100, logger: Optional['RunLogger'] = None, **_,
     ):
-        if p is None:
-            raise ImportError(f"pybullet not available: {_IMPORT_ERR}")
+        if _IMPORT_ERR is not None:
+            raise _IMPORT_ERR
 
         self._backend_name = "pybullet"
+
+        if current_process().name != 'MainProcess':
+            has_viewer = False
+
+        self.process = psutil.Process(os.getpid())
         self.logger = logger
         self.seed()
 
         # --- Init Params ---
+        self.task_name = task_name
+        self.save_folder = save_folder
         self.timestep = float(timestep)
         self.control_frequency = float(control_frequency)
         self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
@@ -59,67 +67,44 @@ class BulletClothEnv_(object):
         self.max_close_steps = int(max_close_steps)
         self.success_distance = float(success_distance)
         self.frame_stack_size = int(frame_stack_size)
-        self.frame_stack = deque([], maxlen=self.frame_stack_size)
-        self.image_size = (int(image_size), int(image_size))
-        self.randomization_kwargs = dict(randomization_kwargs or {})
+        self.goal_noise_range = goal_noise_range
+        self.sparse_dense = sparse_dense
+        self.success_reward = success_reward
+        self.fail_reward = fail_reward
+        self.extra_reward = extra_reward
+        self.image_size = (image_size, image_size)
+        self.randomization_kwargs = randomization_kwargs
+
+        # Reuse MuJoCo’s augmentation policy
+        self.albumentations_transform = A.Compose([
+            A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
+            A.RandomBrightnessContrast(p=0.5),
+            A.Blur(blur_limit=7, p=0.5),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, p=0.5),
+            A.GaussianBlur(blur_limit=(3, 7), p=0.5),
+        ])
+
+        self.has_viewer = has_viewer
         self.image_obs_noise_mean = image_obs_noise_mean
         self.image_obs_noise_std = image_obs_noise_std
 
-        self.sparse_dense = bool(sparse_dense)
-        self.success_reward = float(success_reward)
-        self.fail_reward = float(fail_reward)
-        self.extra_reward = float(extra_reward)
-        self.goal_noise_range = tuple(goal_noise_range)
-        self.save_folder = save_folder
-        
-        # --- UI/Rendering Flags ---
-        self._pb_gui = os.getenv("WITH_GUI", "0") == "1"
-        self.has_viewer = self._pb_gui and current_process().name == "MainProcess"
-        show_full_ui = os.getenv("SHOW_FULL_UI", "0") == "1"
-        
-        # --- Component Initialization ---
-        self.world = PybulletWorld(
-            timestep=self.timestep, use_gui=self._pb_gui,
-            hide_gui_chrome=not show_full_ui, hide_previews=not show_full_ui
+        # Define action space before reset is called
+        self.action_space = gym.spaces.Box(
+            low=-1, high=1, shape=(3,), dtype=np.float32
         )
-        self.robot: Optional[PandaRobot] = None
-        self.cloth: Optional[DeformableCloth] = None
-        
-        cam_cfg = self.randomization_kwargs.get("camera_config", {})
-        cam_fov = float(np.mean(cam_cfg.get("fovy_range", [60.0, 60.0])))
+
+        self.world = PyBulletWorld(self.has_viewer, self.timestep)
+        cam_fov = 60
         self.camera = Camera(self.image_size, cam_fov, self.randomization_kwargs)
-        if hasattr(self, 'albumentations_transform'):
-            self.camera.albumentations_transform = self.albumentations_transform
-        
-        self.task = FoldingTask(
-            task_name="sideways", success_distance=success_distance,
-            goal_noise_range=goal_noise_range, sparse_dense=sparse_dense,
-            success_reward=success_reward, fail_reward=fail_reward,
-            extra_reward=extra_reward, np_random=self.np_random
-        )
+        self.camera.albumentations_transform = self.albumentations_transform
+        self.frame_stack = deque([], maxlen=self.frame_stack_size)
 
-        # --- Workspace ---
         self.limits_min = [-0.35, -0.35, 0.0]
-        self.limits_max = [0.05, 0.05, 0.4]
-        
-        try:
-            self.process = psutil.Process(os.getpid())
-        except (NameError, AttributeError):
-            self.process = None
+        self.limits_max = [0.35, 0.35, 0.4]
 
-        # --- Build simulation and set initial state ---
         self.reset()
 
-        self.desired_pos_ctrl_W = self.relative_origin + np.array([0.05, 0.0, 0.0], np.float32)
-        self.desired_pos_step_W = self.desired_pos_ctrl_W.copy()
-        # Re-seed the frame stack with the image from this offset state.
-        img = self.camera.capture_image(self._fixed_camera_target)
-        self.frame_stack.clear()
-        for _ in range(self.frame_stack_size):
-            self.frame_stack.append(img)
-
-        # --- Action/Observation Spaces ---
-        self.action_space = gym.spaces.Box(-1, 1, shape=(3,), dtype=np.float32)
+        # --- Define observation space ---
         obs = self.get_obs()
         self.observation_space = gym.spaces.Dict(dict(
             desired_goal=gym.spaces.Box(-np.inf, np.inf, shape=obs['achieved_goal'].shape, dtype=np.float32),
@@ -142,8 +127,10 @@ class BulletClothEnv_(object):
         return [seed]
 
     def reset(self):
+        self.current_step = 0
         self.world.reset()
-        
+        self.world.apply_domain_randomization(self.randomization_kwargs)
+
         # Create robot and cloth
         self.robot = PandaRobot(base_position=[0, 0, 0], base_orientation=p.getQuaternionFromEuler([0, 0, 0]))
         cloth_pos = [0.5, 0.0, self.world.get_table_top_z() + 0.05]
@@ -155,15 +142,20 @@ class BulletClothEnv_(object):
         # Set camera target and update debug view
         self._fixed_camera_target = self.cloth.get_center_W()
         if self.has_viewer:
-            # HARDCODE to "default" to match original behavior for the debug camera.
             self.camera.set_debug_camera(self._fixed_camera_target, cam_type="default")
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
+
+        # Initialize the task
+        self.task = FoldingTask(
+            self.task_name, self.cloth, self.success_distance, self.goal_noise_range, self.sparse_dense,
+            self.success_reward, self.fail_reward, self.extra_reward, self.np_random
+        )
 
         # Move robot to grasp corner
         corner_v_name = self.cloth.corner_v_names["0"]
         corner_world_pos = self.cloth.get_positions_W()[corner_v_name]
         
-        # First pass
+        # First pass IK
         joint_positions = self.robot.calculate_ik(corner_world_pos)
         self.robot.reset_to_joint_positions(joint_positions)
 
@@ -172,24 +164,25 @@ class BulletClothEnv_(object):
         if np.linalg.norm(corner_world_pos - ee_now) > 1e-4:
             joint_positions = self.robot.calculate_ik(corner_world_pos)
             self.robot.reset_to_joint_positions(joint_positions)
-            self.world.step() # Step only after the second pass, if it happens.
+            self.world.step()
 
-        # Anchor cloth to robot
+        # Anchor cloth to robot's hand
         self.cloth.create_anchor(corner_v_name, self.robot.robot_id, self.robot.hand_link_index)
 
-        # Initialize state variables
+        # Initialize state variables based on final EE position
         self.relative_origin = self.robot.get_ee_position_W()
         self.desired_pos_step_W = self.relative_origin.copy()
         self.desired_pos_ctrl_W = self.relative_origin.copy()
         self.min_absolute_W = self.relative_origin + np.array(self.limits_min)
         self.max_absolute_W = self.relative_origin + np.array(self.limits_max)
-        self.previous_raw_action = np.zeros(3, dtype=np.float32)
+        self.previous_raw_action = np.zeros_like(self.action_space.sample())
         self.episode_ee_close_steps = 0
-        self.current_step = 0
         self._prev_ee_pos_W = self.robot.get_ee_position_W()
 
-        # Sample goal and populate frame stack
+        # Set goal for the episode
         self.goal, self.goal_noise = self.task.sample_goal(self.get_cloth_position_I(), self.cloth.sites)
+
+        # Capture initial image
         img = self.camera.capture_image(self._fixed_camera_target)
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
@@ -265,11 +258,11 @@ class BulletClothEnv_(object):
         inv_map = {v: k for k, v in self.cloth.corner_v_names.items()}
         distances = {"0": 0, "1": 0, "2": 0, "3": 0};
         for c in self.task.constraints:
-            s1_v_name = self.cloth.sites.get(c.site1)
-            if s1_v_name in inv_map:
-                s2_v_name = self.cloth.sites.get(c.site2)
-                dist = np.linalg.norm(cloth_pos_I[s1_v_name] - cloth_pos_I[s2_v_name])
-                distances[inv_map[s1_v_name]] = dist
+            s1_v_idx = self.cloth.sites.get(c['origin'])
+            if s1_v_idx in inv_map:
+                s2_v_idx = self.cloth.sites.get(c['target'])
+                dist = np.linalg.norm(cloth_pos_I[s1_v_idx] - cloth_pos_I[s2_v_idx])
+                distances[inv_map[s1_v_idx]] = dist
         
         for k in distances.keys():
             info[f"corner_{k}"] = distances[k]
