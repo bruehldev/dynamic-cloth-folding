@@ -23,7 +23,7 @@ from typing import Dict, Any, Tuple
 try:
     from cloth_tools import (
         write_grid_obj, write_poncho_obj, write_skirt_obj,
-        write_scarf_obj, write_cape_obj  # <-- add these
+        write_scarf_obj, write_cape_obj
     )
 except Exception as e:
     raise SystemExit("ImportError: place cloth_dr_batch.py alongside cloth_tools.py.\n"+str(e))
@@ -47,15 +47,15 @@ CONFIG: Dict[str, Any] = {
 
     # ---- GRID (square cloth) ----
     "grid": {
-        "n_choices": [9, 13, 17, 21],
-        "edge_range": (0.8, 1.2),
+        "n_choices": [9, 13, 17, 21],       # vertices per side
+        "edge_range": (0.8, 1.2),           # half-extent meters
         "diagonal_choices": ["A", "B", "checker", "row-alt", "col-alt"],
         "shear_x_range": (-0.2, 0.2),
         "shear_y_range": (-0.1, 0.1),
         "rot_deg_range": (-15.0, 15.0),
         "scale_x_range": (0.85, 1.15),
         "scale_y_range": (0.85, 1.15),
-        "edge_ruffle_amp_range": (0.0, 0.015),
+        "edge_ruffle_amp_range": (0.0, 0.015),   # meters
         "edge_ruffle_freq_choices": [6, 8, 10, 12],
         "jitter_mm_range": (0.0, 3.0),
         "uv_scale_u_range": (0.75, 1.35),
@@ -69,16 +69,18 @@ CONFIG: Dict[str, Any] = {
         "n_choices": [33, 41],
         "edge_range": (0.9, 1.3),
         "hole_radius_range": (0.18, 0.35),
+        # Reuse UV ranges from grid (will map 0..1 base to offsets)
         "uv_scale_u_range": (0.75, 1.35),
         "uv_scale_v_range": (0.75, 1.35),
         "uv_offset_u_range": (-0.2, 0.3),
         "uv_offset_v_range": (-0.1, 0.4),
+        # Light noise applied post-hoc isn’t exposed in write_poncho_obj; keep modest values upstream if needed
     },
 
     # ---- SKIRT (annulus) ----
     "skirt": {
-        "na_choices": [48, 64, 96],
-        "nr_choices": [12, 16, 20],
+        "na_choices": [48, 64, 96],   # angular samples
+        "nr_choices": [12, 16, 20],   # radial rings
         "r_inner_range": (0.05, 0.15),
         "r_outer_range": (0.8, 1.2),
         "flare_pow_range": (0.8, 1.5),
@@ -174,11 +176,11 @@ def sample_grid(cfg: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 def sample_poncho(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    # write_poncho_obj uses base grid UVs as-is; we can fold UV transforms later if needed
     return dict(
         n=_rand_choice(cfg["n_choices"]),
         edge_len=_rand_range(*cfg["edge_range"]),
         hole_radius=_rand_range(*cfg["hole_radius_range"]),
+        # UV: reuse grid ranges optionally by mapping later if you add flags
     )
 
 def sample_skirt(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -193,7 +195,7 @@ def sample_skirt(cfg: Dict[str, Any]) -> Dict[str, Any]:
         uv_tile_v=_rand_range(*cfg["uv_tile_v_range"]),
     )
 
-def sample_scarf(cfg):
+def sample_scarf(cfg: Dict[str, Any]) -> Dict[str, Any]:
     def flip(p): return random.random() < p
     return dict(
         nx=_rand_choice(cfg["nx_choices"]),
@@ -240,9 +242,9 @@ def sample_cape(cfg):
 def main():
     ap = argparse.ArgumentParser(description="Batch generator for DR cloth using cloth_tools.")
     ap.add_argument("--out", required=True, help="Output directory for generated OBJs.")
-    ap.add_argument("--count", type=int, default=32, help="How many meshes to generate.")
+    ap.add_argument("--count", type=int, default=32, help="How many meshes of EACH TYPE to generate.")
     ap.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
-    ap.add_argument("--prefix", default=None, help="Override object_name prefix (defaults to CONFIG value).")
+    ap.add_argument("--prefix", default=None, help="Optional subfolder under --out (e.g. experiment/run name). If omitted, files go directly under --out/<type>/.")
     args = ap.parse_args()
 
     if args.seed is not None:
@@ -251,61 +253,44 @@ def main():
     os.makedirs(args.out, exist_ok=True)
 
     weights = CONFIG["type_weights"]
-    prefix = args.prefix or CONFIG.get("object_name_prefix", "dr")
+    enabled_types = [t for t, w in weights.items() if w > 0.0]  # <- define enabled types
+    prefix = args.prefix  # subfolder name (may be None)
     mtllib = CONFIG.get("mtllib", None)
 
     stamp = _stamp()
-    for idx in range(args.count):
-        t = _pick_type(weights)
-        name = f"{prefix}_{t}_{stamp}_{idx:04d}"
 
-        if t == "grid":
-            p = sample_grid(CONFIG["grid"])
-            dst = os.path.join(args.out, f"{name}.obj")
-            write_grid_obj(
-                dst,
-                object_name=name,
-                mtllib=mtllib,
-                **p,
-            )
-        elif t == "poncho":
-            p = sample_poncho(CONFIG["poncho"])
-            dst = os.path.join(args.out, f"{name}.obj")
-            write_poncho_obj(
-                dst,
-                object_name=name,
-                mtllib=mtllib,
-                **p,
-            )
-        elif t == "skirt":
-            p = sample_skirt(CONFIG["skirt"])
-            dst = os.path.join(args.out, f"{name}.obj")
-            write_skirt_obj(
-                dst,
-                object_name=name,
-                mtllib=mtllib,
-                **p,
-            )
-        elif t == "scarf":
-            p = sample_scarf(CONFIG["scarf"])
-            dst = os.path.join(args.out, f"{name}.obj")
-            write_scarf_obj(
-                dst,
-                object_name=name,
-                mtllib=mtllib,
-                **p,
-            )
-        elif t == "cape":
-            p = sample_cape(CONFIG["cape"])
-            dst = os.path.join(args.out, f"{name}.obj")
-            write_cape_obj(
-                dst,
-                object_name=name,
-                mtllib=mtllib,
-                **p,
-            )
-        else:
-            raise RuntimeError(f"Unknown type: {t}")
+    # ensure subfolders per type (optionally nested under prefix)
+    base_out = os.path.join(args.out, prefix) if prefix else args.out
+    os.makedirs(base_out, exist_ok=True)
+    for t in enabled_types:
+        os.makedirs(os.path.join(base_out, t), exist_ok=True)
+
+    # per-type counters (count applies to each enabled type)
+    for t in enabled_types:
+        for idx in range(args.count):
+            # filename no longer includes prefix; prefix is a folder
+            name = f"{t}_{stamp}_{idx:04d}"
+            subdir = os.path.join(base_out, t)
+            dst = os.path.join(subdir, f"{name}.obj")
+
+            if t == "grid":
+                p = sample_grid(CONFIG["grid"])
+                write_grid_obj(dst, object_name=name, mtllib=mtllib, **p)
+            elif t == "poncho":
+                p = sample_poncho(CONFIG["poncho"])
+                write_poncho_obj(dst, object_name=name, mtllib=mtllib, **p)
+            elif t == "skirt":
+                p = sample_skirt(CONFIG["skirt"])
+                write_skirt_obj(dst, object_name=name, mtllib=mtllib, **p)
+            elif t == "scarf":
+                p = sample_scarf(CONFIG["scarf"])
+                write_scarf_obj(dst, object_name=name, mtllib=mtllib, **p)
+            elif t == "cape":
+                p = sample_cape(CONFIG["cape"])
+                write_cape_obj(dst, object_name=name, mtllib=mtllib, **p)
+            else:
+                raise RuntimeError(f"Unknown type: {t}")
+
 
 if __name__ == "__main__":
     main()
