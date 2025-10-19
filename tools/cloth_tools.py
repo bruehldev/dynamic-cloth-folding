@@ -57,27 +57,109 @@ def write_obj(path, V, F, header="# generated obj\n", vt=None, vn=None, extras=N
 def complexity_tag(nverts, nfaces):
     return int((nverts + nfaces) / 100)
 
-# --------------------- grid generator ---------------------
+# --------------------- grid & shape generators ---------------------
+def _emit_obj(out_path, V, triangles, vt=None, vn_dir=(0.0,0.0,-1.0), extras=None, header="# generated obj\n"):
+    V = np.asarray(V, float)
+    vn = np.array([vn_dir], float) if vn_dir is not None else None
+    # default UV: one per-vertex if not supplied
+    if vt is None:
+        # try to infer rectangular bounds for normalized uv
+        minv, maxv = V.min(0), V.max(0)
+        size = np.maximum(maxv - minv, 1e-12)
+        uv = (V[:, :2] - minv[:2]) / size[:2]
+        vt = uv.tolist()
+    # faces as v/vt/vn strings
+    F = []
+    for (a,b,c) in triangles:
+        if vn is not None:
+            F.append(f"f {a}/{a}/1 {b}/{b}/1 {c}/{c}/1")
+        else:
+            F.append((a,b,c))
+    write_obj(out_path, V, F, header=header, vt=vt, vn=vn, extras=extras)
+    return out_path
+
+
+def _build_grid(n, halfx, halfy, z=0.0):
+    V=[]; vt=[]
+    for j in range(n):
+        y = -halfy + (2*halfy)*j/(n-1)
+        for i in range(n):
+            x = -halfx + (2*halfx)*i/(n-1)
+            V.append([x,y,z])
+            vt.append([i/(n-1), 1.0 - j/(n-1)])
+    return np.array(V,float), vt
+
+
+def _triangulate_grid(n, diagonal="A"):
+    def vid(i,j): return j*n + i + 1  # 1-based
+    tris=[]
+    for j in range(n-1):
+        for i in range(n-1):
+            v00=vid(i,j); v10=vid(i+1,j); v01=vid(i,j+1); v11=vid(i+1,j+1)
+            if diagonal=="A":
+                tris.append((v00,v11,v10)); tris.append((v00,v01,v11))
+            elif diagonal=="B":
+                tris.append((v00,v10,v01)); tris.append((v10,v11,v01))
+            elif diagonal=="checker":
+                if (i+j)%2==0:
+                    tris.append((v00,v11,v10)); tris.append((v00,v01,v11))
+                else:
+                    tris.append((v00,v10,v01)); tris.append((v10,v11,v01))
+            elif diagonal=="row-alt":
+                if j%2==0:
+                    tris.append((v00,v11,v10)); tris.append((v00,v01,v11))
+                else:
+                    tris.append((v00,v10,v01)); tris.append((v10,v11,v01))
+            elif diagonal=="col-alt":
+                if i%2==0:
+                    tris.append((v00,v11,v10)); tris.append((v00,v01,v11))
+                else:
+                    tris.append((v00,v10,v01)); tris.append((v10,v11,v01))
+            else:
+                tris.append((v00,v11,v10)); tris.append((v00,v01,v11))
+    return tris
+
+
+def _affine(V, shear_x=0.0, shear_y=0.0, rot_deg=0.0, scale_x=1.0, scale_y=1.0):
+    th = math.radians(rot_deg)
+    c,s = math.cos(th), math.sin(th)
+    R = np.array([[c,-s,0],[s,c,0],[0,0,1.0]])
+    S = np.array([[scale_x,0,0],[0,scale_y,0],[0,0,1]])
+    Sh = np.array([[1,shear_x,0],[shear_y,1,0],[0,0,1]])
+    return (V @ (S@Sh@R).T)
+
+
+def _edge_ruffle(V, n, amp=0.0, freq=8):
+    if amp==0: return V
+    V = V.copy()
+    N=n
+    def is_edge(i,j): return (i==0 or j==0 or i==N-1 or j==N-1)
+    for j in range(N):
+        for i in range(N):
+            if is_edge(i,j):
+                t = (i + j) / (N-1)
+                V[j*N+i,2] += amp * math.sin(2*math.pi*freq*t)
+    return V
+
+
+def _jitter(V, sigma=0.0):
+    if sigma<=0: return V
+    J = np.random.normal(0.0, sigma, size=V.shape)
+    J[:,2]*=0.2
+    return V + J
+
+
 def write_grid_obj(path, n=9, edge_len=1.0, z=0.0, thickness_mm=0.0,
-                   blender_compat=True, object_name=None, mtllib=None):
+                   blender_compat=True, object_name=None, mtllib=None,
+                   diagonal="A", shear_x=0.0, shear_y=0.0, rot_deg=0.0,
+                   scale_x=1.0, scale_y=1.0, edge_ruffle_amp=0.0, edge_ruffle_freq=8,
+                   jitter_mm=0.0, uv_scale_u=1.0, uv_scale_v=1.0,
+                   uv_offset_u=0.0, uv_offset_v=0.0):
     """
-    Generate n×n grid (single triangulated sheet).
-
-    If blender_compat=True (default):
-      - Coordinates span [-edge_len, +edge_len] in X and Y (edge_len is *half-extent*).
-      - Uniform diagonal split (v00--v11) for all quads (no checkerboard).
-      - Face winding is CLOCKWISE when viewed from +Z so that normals point to -Z,
-        matching Blender's default plane triangulation.
-      - One shared vertex normal (0,0,-1) and a 0..1 UV grid are emitted.
-      - 'usemtl None' and 's 1' are written for compatibility with cloth_z_up.obj.
-
-    If blender_compat=False (legacy behavior):
-      - Coordinates span [-edge_len/2, +edge_len/2].
-      - Checkerboard diagonal split with CCW winding (normals +Z).
-      - No vt/vn lines are emitted.
+    Generate n×n grid with many DR options.
     """
-    verts_count = n * n
-    faces_count = 2 * (n - 1) * (n - 1)
+    verts_count = n*n
+    faces_count = 2*(n-1)*(n-1)
     comp = complexity_tag(verts_count, faces_count)
 
     base, ext = os.path.splitext(path)
@@ -96,104 +178,93 @@ def write_grid_obj(path, n=9, edge_len=1.0, z=0.0, thickness_mm=0.0,
             out_dir = os.path.dirname(path) or "."
             out_path = path
 
-    verts = []
-    faces = []
-    vt = None
-    vn = None
-    extras = None
+    # geometry
+    V, vt = _build_grid(n, edge_len, edge_len, z)
+    V = _edge_ruffle(V, n, amp=edge_ruffle_amp, freq=edge_ruffle_freq)
+    V = _affine(V, shear_x=shear_x, shear_y=shear_y, rot_deg=rot_deg, scale_x=scale_x, scale_y=scale_y)
+    V = _jitter(V, sigma=jitter_mm*1e-3)
 
-    if blender_compat:
-        # Half-extent coordinates to match cloth_z_up.obj scale when edge_len=1.0
-        half = edge_len
-        step = (2.0 * edge_len) / (n - 1)
+    # triangles
+    tris = _triangulate_grid(n, diagonal=diagonal)
 
-        for j in range(n):
-            y = -half + j * step
-            for i in range(n):
-                x = -half + i * step
-                verts.append([x, y, z])
+    # UV transform
+    vt2=[]
+    for (u,v) in vt:
+        u2 = u*uv_scale_u + uv_offset_u
+        v2 = v*uv_scale_v + uv_offset_v
+        vt2.append([u2,v2])
 
-        # UVs 0..1 (u increases with x, v decreases with y to match -Z winding)
-        vt = []
-        for j in range(n):
-            vcoord = 1.0 - (j / (n - 1))
-            for i in range(n):
-                u = i / (n - 1)
-                vt.append([u, vcoord])
+    # extras
+    extras=[]
+    if mtllib: extras.append(f"mtllib {mtllib}")
+    if object_name: extras.append(f"o {object_name}")
+    extras += ["usemtl None","s 1"]
 
-        # Single normal pointing -Z
-        vn = np.array([[0.0, 0.0, -1.0]], float)
+    _emit_obj(out_path, V, tris, vt=vt2, vn_dir=(0,0,-1), extras=extras,
+              header="# mj DR grid\n")
+    print(f"Wrote {out_path} (verts={verts_count}, faces={faces_count}, complexity={comp})")
+    return out_path
 
-        def vid(i, j):  # 1-based
-            return j * n + i + 1
 
-        # Uniform 'A' diagonal (v00--v11) with CLOCKWISE order -> -Z normals
-        f_lines = []
-        for j in range(n - 1):
-            for i in range(n - 1):
-                v00 = vid(i, j)
-                v10 = vid(i + 1, j)
-                v01 = vid(i, j + 1)
-                v11 = vid(i + 1, j + 1)
-                f_lines.append(f"f {v00}/{v00}/1 {v11}/{v11}/1 {v10}/{v10}/1")
-                f_lines.append(f"f {v00}/{v00}/1 {v01}/{v01}/1 {v11}/{v11}/1")
-        faces = f_lines
+def write_poncho_obj(path, n=33, edge_len=1.0, hole_radius=0.25, **kwargs):
+    """Square grid with a circular head hole (removed faces)."""
+    V, vt = _build_grid(n, edge_len, edge_len, 0.0)
+    tris = _triangulate_grid(n, diagonal=kwargs.get('diagonal','A'))
+    # mask: keep triangles only if all three verts are outside hole
+    def keep_vid(vid):
+        i0 = vid-1
+        p = V[i0]
+        r = math.hypot(p[0], p[1])
+        return r >= hole_radius
+    keep=[]
+    for (a,b,c) in tris:
+        if keep_vid(a) and keep_vid(b) and keep_vid(c):
+            keep.append((a,b,c))
+    # reindex to compact vertex list
+    used = sorted({i for tri in keep for i in tri})
+    remap = {old:i+1 for i,old in enumerate(used)}
+    V2 = V[np.array(used)-1]
+    vt2 = [vt[i-1] for i in used]
+    tris2 = [(remap[a], remap[b], remap[c]) for (a,b,c) in keep]
+    extras=["usemtl None","s 1"]
+    out_path = path if path.endswith('.obj') else os.path.join(path, f"poncho_n{n}.obj")
+    _emit_obj(out_path, V2, tris2, vt=vt2, vn_dir=(0,0,-1), extras=extras, header="# mj poncho\n")
+    print(f"Wrote {out_path} (verts={len(V2)}, faces={len(tris2)})")
+    return out_path
 
-        # Optional extras to mirror Blender export style
-        extras = []
-        if mtllib:
-            extras.append(f"mtllib {mtllib}")
-        if object_name:
-            extras.append(f"o {object_name}")
-        extras += ["usemtl None", "s 1"]
 
-        # thickness_mm ignored in blender-compat mode (mesh is perfectly flat)
-        hz = 0.0
-    else:
-        # Legacy mode (previous behavior)
-        step = edge_len / (n - 1)
-        half = edge_len / 2.0
-        # half-thickness in meters
-        hz = max(0.0, float(thickness_mm)) * 1e-3 * 0.5
-
-        for j in range(n):
-            y = -half + j * step
-            for i in range(n):
-                x = -half + i * step
-                if hz > 0.0:
-                    # Checkerboard: alternate +/- hz to create a tiny z-span
-                    z_off = hz if ((i + j) % 2 == 0) else -hz
-                    verts.append([x, y, z + z_off])
-                else:
-                    verts.append([x, y, z])
-
-        def vid(i, j):  # 1-based for OBJ
-            return j * n + i + 1
-
-        for j in range(n - 1):
-            for i in range(n - 1):
-                v00 = vid(i, j)
-                v10 = vid(i + 1, j)
-                v01 = vid(i, j + 1)
-                v11 = vid(i + 1, j + 1)
-
-                if (i + j) % 2 == 0:
-                    # split v00--v11, CCW (+Z)
-                    faces.append((v00, v10, v11))
-                    faces.append((v00, v11, v01))
-                else:
-                    # split v10--v01, CCW (+Z)
-                    faces.append((v00, v10, v01))
-                    faces.append((v10, v11, v01))
-
-        vt = None
-        vn = None
-        extras = None
-
-    V = np.array(verts, float)
-    header = "# mj_match_square.obj (blender-compat)\n" if blender_compat else "# mj_match_square.obj\n"
-    write_obj(out_path, V, faces, header=header, vt=vt, vn=vn, extras=extras)
-    print(f"Wrote {out_path} (verts={verts_count}, faces={faces_count}, complexity={comp}, blender_compat={blender_compat})")
+def write_skirt_obj(path, na=64, nr=16, r_inner=0.1, r_outer=1.0, flare_pow=1.0,
+                     jitter_mm=0.0, uv_tile_u=1.0, uv_tile_v=1.0, object_name=None, mtllib=None):
+    """Polar annulus (skirt-like) with radial rings."""
+    # verts
+    V=[]; vt=[]
+    for j in range(nr):
+        t = j/(nr-1)
+        r = r_inner + (r_outer - r_inner)*(t**flare_pow)
+        for i in range(na):
+            a = 2*math.pi * i/na
+            x = r*math.cos(a); y = r*math.sin(a)
+            V.append([x,y,0.0])
+            vt.append([(i/na)*uv_tile_u, (1.0-t)*uv_tile_v])
+    V = np.array(V,float)
+    # faces
+    def vid(i,j): return j*na + (i%na) + 1
+    tris=[]
+    for j in range(nr-1):
+        for i in range(na):
+            v00=vid(i,j); v10=vid(i+1,j); v01=vid(i,j+1); v11=vid(i+1,j+1)
+            tris.append((v00,v11,v10)); tris.append((v00,v01,v11))
+    # jitter
+    if jitter_mm>0:
+        V = _jitter(V, sigma=jitter_mm*1e-3)
+    # extras
+    extras=[]
+    if mtllib: extras.append(f"mtllib {mtllib}")
+    if object_name: extras.append(f"o {object_name}")
+    extras += ["usemtl None","s 1"]
+    out_path = path if path.endswith('.obj') else os.path.join(path, f"skirt_na{na}_nr{nr}.obj")
+    _emit_obj(out_path, V, tris, vt=vt, vn_dir=(0,0,-1), extras=extras, header="# mj skirt annulus\n")
+    print(f"Wrote {out_path} (verts={len(V)}, faces={len(tris)})")
     return out_path
 
 # --------------------- rotation helpers ---------------------
@@ -366,25 +437,31 @@ def parse_args():
     ap = argparse.ArgumentParser(description="Cloth mesh tools: make grid or rotate OBJ to Z-up.")
     sub = ap.add_subparsers(dest="cmd")
 
-    g = sub.add_parser("make-grid", help="Generate an n×n grid OBJ with complexity in filename.")
+    g = sub.add_parser("make-grid", help="Generate an n×n grid OBJ with complexity in filename (with DR options).")
     g.add_argument("--out", required=True, help="Output path OR directory OR stem.")
     g.add_argument("--n", type=int, default=9, help="Vertices per side (default 9).")
     g.add_argument("--edge", type=float, default=1.0, help="Half-extent in meters in blender-compat mode; full width in legacy mode.")
     g.add_argument("--z", type=float, default=0.0, help="Z height (default 0.0).")
-    g.add_argument("--thickness-mm", type=float, default=0.0,
-                   help="Target total z-span in millimeters (legacy mode only; blender-compat ignores this).")
-    g.add_argument("--no-blender-compat", action="store_true",
-                   help="Disable blender-style topology/scale/winding/uv and use legacy generator.")
-    g.add_argument("--object-name", default=None,
-                   help="Write an 'o <name>' line before faces.")
-    g.add_argument("--mtl", dest="mtllib", default=None,
-                   help="Write an 'mtllib <file>' line before faces.")
+    g.add_argument("--thickness-mm", type=float, default=0.0, help="Ignored (kept for back-compat).")
+    g.add_argument("--no-blender-compat", action="store_true", help="(Back-compat only)")
+    g.add_argument("--object-name", default=None, help="Write an 'o <name>' line before faces.")
+    g.add_argument("--mtl", dest="mtllib", default=None, help="Write an 'mtllib <file>' line before faces.")
+    g.add_argument("--diagonal", choices=["A","B","checker","row-alt","col-alt"], default="A")
+    g.add_argument("--shear-x", type=float, default=0.0)
+    g.add_argument("--shear-y", type=float, default=0.0)
+    g.add_argument("--rot-deg", type=float, default=0.0)
+    g.add_argument("--scale-x", type=float, default=1.0)
+    g.add_argument("--scale-y", type=float, default=1.0)
+    g.add_argument("--edge-ruffle-amp", type=float, default=0.0, help="Meters of sinusoidal z-offset along boundary")
+    g.add_argument("--edge-ruffle-freq", type=int, default=8)
+    g.add_argument("--jitter-mm", type=float, default=0.0)
+    g.add_argument("--uv-scale", nargs=2, type=float, default=[1.0,1.0], metavar=("USCALE","VSCALE"))
+    g.add_argument("--uv-offset", nargs=2, type=float, default=[0.0,0.0], metavar=("UOFF","VOFF"))
 
     r = sub.add_parser("rotate", help="Rotate an OBJ to Z-up and compress thickness.")
     r.add_argument("--src", required=True, help="Source OBJ.")
     r.add_argument("--dst", default=None, help="Destination OBJ (auto-named if omitted).")
-    r.add_argument("--thickness-mm", type=float, default=1.0,
-                   help="Target total z-span in millimeters (default 1.0).")
+    r.add_argument("--thickness-mm", type=float, default=1.0, help="Target total z-span in millimeters (default 1.0).")
 
     s = sub.add_parser("stats", help="Print n/verts/faces/complex for an OBJ.")
     s.add_argument("--src", required=True, help="Source OBJ to analyze.")
@@ -395,24 +472,55 @@ def parse_args():
     c.add_argument("--tol", type=float, default=1e-6, help="Position tolerance (default 1e-6).")
     c.add_argument("--ignore-winding", action="store_true", help="Ignore vertex winding when comparing.")
 
+    p = sub.add_parser("make-poncho", help="Square cloth with circular head hole (domain randomization ready).")
+    p.add_argument("--out", required=True)
+    p.add_argument("--n", type=int, default=33)
+    p.add_argument("--edge", type=float, default=1.0)
+    p.add_argument("--hole-radius", type=float, default=0.25)
+
+    k = sub.add_parser("make-skirt", help="Radial annulus skirt.")
+    k.add_argument("--out", required=True)
+    k.add_argument("--na", type=int, default=64)
+    k.add_argument("--nr", type=int, default=16)
+    k.add_argument("--r-inner", type=float, default=0.1)
+    k.add_argument("--r-outer", type=float, default=1.0)
+    k.add_argument("--flare-pow", type=float, default=1.0)
+    k.add_argument("--jitter-mm", type=float, default=0.0)
+    k.add_argument("--uv-tile", nargs=2, type=float, default=[1.0,1.0], metavar=("US","VS"))
+
     return ap.parse_args()
 
 def main():
     args = parse_args()
     if args.cmd == "make-grid":
-        write_grid_obj(args.out, n=args.n, edge_len=args.edge, z=args.z, thickness_mm=args.thickness_mm, blender_compat=(not args.no_blender_compat), object_name=args.object_name, mtllib=args.mtllib)
+        write_grid_obj(
+            args.out, n=args.n, edge_len=args.edge, z=args.z,
+            thickness_mm=args.thickness_mm, blender_compat=(not args.no_blender_compat),
+            object_name=args.object_name, mtllib=args.mtllib, diagonal=args.diagonal,
+            shear_x=args.shear_x, shear_y=args.shear_y, rot_deg=args.rot_deg,
+            scale_x=args.scale_x, scale_y=args.scale_y, edge_ruffle_amp=args.edge_ruffle_amp,
+            edge_ruffle_freq=args.edge_ruffle_freq, jitter_mm=args.jitter_mm,
+            uv_scale_u=args.uv_scale[0], uv_scale_v=args.uv_scale[1],
+            uv_offset_u=args.uv_offset[0], uv_offset_v=args.uv_offset[1],
+        )
     elif args.cmd == "rotate":
         rotate_to_zup(args.src, dst=args.dst, thickness_mm=args.thickness_mm)
     elif args.cmd == "stats":
         obj_stats(args.src)
     elif args.cmd == "compare":
-        # run compare; function prints a summary and returns boolean
         _ = _compare(args.a, args.b, tol=args.tol, ignore_winding=args.ignore_winding)
+    elif args.cmd == "make-poncho":
+        write_poncho_obj(args.out, n=args.n, edge_len=args.edge, hole_radius=args.hole_radius)
+    elif args.cmd == "make-skirt":
+        write_skirt_obj(args.out, na=args.na, nr=args.nr, r_inner=args.r_inner, r_outer=args.r_outer,
+                        flare_pow=args.flare_pow, jitter_mm=args.jitter_mm,
+                        uv_tile_u=args.uv_tile[0], uv_tile_v=args.uv_tile[1])
     else:
         print("No subcommand given. Examples:")
         print("  python cloth_tools.py make-grid --out assets/cloth/ --n 9 --edge 1.0")
+        print("  python cloth_tools.py make-poncho --out assets/cloth/ --n 33 --edge 1.0 --hole-radius 0.25")
+        print("  python cloth_tools.py make-skirt --out assets/cloth/ --na 64 --nr 16 --r-inner 0.1 --r-outer 1.0")
         print("  python cloth_tools.py rotate --src assets/cloth/your.obj --thickness-mm 1.0")
-        print("  python cloth_tools.py stats --src assets/cloth/your.obj")
         print("  python cloth_tools.py compare --a cloth_z_up.obj --b assets/cloth/mj_square_n5_v25_f32_complex0.obj")
 
 if __name__ == "__main__":
