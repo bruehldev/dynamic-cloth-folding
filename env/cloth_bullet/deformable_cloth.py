@@ -4,14 +4,14 @@ import pybullet as p
 import numpy as np
 
 class DeformableCloth(object):
-    def __init__(self, base_position, scale=0.15, mass=1.0, target_edge_length=None, **kwargs):
+    def __init__(self, base_position, scale=0.15, mass=1.0, target_edge_length=None, mesh_path="cloth_z_up.obj", **kwargs):
         """
         If target_edge_length is given (meters), the cloth is scaled so that
         its XY edge length matches target_edge_length (MuJoCo's cloth_size).
         """
         def _load(scale_val):
             return p.loadSoftBody(
-                "cloth_z_up.obj",
+                mesh_path,               
                 basePosition=base_position,
                 scale=scale_val,
                 mass=mass,

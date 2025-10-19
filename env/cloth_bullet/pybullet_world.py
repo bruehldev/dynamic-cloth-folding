@@ -31,8 +31,8 @@ class PyBulletWorld(object):
         self.plane_id = p.loadURDF("plane.urdf")
 
         # Load table as a box
-        table_half_extents = [0.4, 0.4, 0.02]
-        table_pos = [0.5, 0.0, table_half_extents[2]]
+        table_half_extents = [0.3, 0.3, 0.13]          # matches MJ <geom size="0.3 0.3 0.13">
+        table_pos = [0.4, 0.0, 0.0033164]              # so top = 0.0033164 + 0.13 ≈ 0.1333164
         box_collision_shape_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=table_half_extents)
         box_visual_shape_id = p.createVisualShape(p.GEOM_BOX, halfExtents=table_half_extents, rgbaColor=[0.8, 0.8, 0.8, 1])
         self.table_id = p.createMultiBody(

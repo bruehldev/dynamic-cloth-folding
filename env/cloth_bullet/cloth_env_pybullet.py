@@ -212,13 +212,14 @@ class BulletClothEnv_(object):
             useFaceContact=int(cloth_cfg.get("useFaceContact", 1)),
         )
         # No target_edge_length yet (DeformableCloth ignores it in current code)
-        self.cloth = DeformableCloth(base_position=cloth_pos, **cloth_kwargs)
+        mesh_path = str(cloth_cfg.get("mesh_path", "cloth_z_up.obj"))
+        self.cloth = DeformableCloth(base_position=cloth_pos, mesh_path=mesh_path, **cloth_kwargs)
 
         # Wait for cloth to settle
         for _ in range(60): self.world.step()
 
         # Set camera target to MuJoCo's lookatbody, not the table/cloth center
-        mujoco_lookatbody = np.array([0.494764, 0.006684, self.world.get_table_top_z()])
+        mujoco_lookatbody = np.array([0.49476399, 0.00668401, 0.13310541], dtype=np.float32)
         self._fixed_camera_target = mujoco_lookatbody
         self.camera.begin_episode(self._fixed_camera_target)
         if self.has_viewer:
