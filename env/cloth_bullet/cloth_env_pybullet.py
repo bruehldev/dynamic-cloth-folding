@@ -215,6 +215,14 @@ class BulletClothEnv_(object):
         mesh_path = str(cloth_cfg.get("mesh_path", "cloth_z_up.obj"))
         self.cloth = DeformableCloth(base_position=cloth_pos, mesh_path=mesh_path, **cloth_kwargs)
 
+        # Pass logger down so cloth can report texture DR
+        try:
+            self.cloth.logger = self.logger
+        except Exception:
+            pass
+
+        # Appearance (textures + tint) handled by DeformableCloth
+        self.cloth.apply_appearance(self.randomization_kwargs)
         # Wait for cloth to settle
         for _ in range(60): self.world.step()
 
@@ -269,8 +277,8 @@ class BulletClothEnv_(object):
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
             
-        # Randomize cloth color (only if DR enabled)
-        if enable_dr and self.randomization_kwargs.get("materials_randomization", False):
+        # Randomize cloth color (skip if DeformableCloth already tinted)
+        if enable_dr and self.randomization_kwargs.get("materials_randomization", False) and not getattr(self.cloth, "_tint_applied", False):
             lo = np.array(cloth_cfg.get("color_lo", [0.3,0.5,1.0,1.0]))
             hi = np.array(cloth_cfg.get("color_hi", [1.0,1.0,1.0,1.0]))
             p.changeVisualShape(self.cloth.cloth_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist())
@@ -467,6 +475,21 @@ class BulletClothEnv_(object):
             'timestep': self.timestep,
             'goal_noise': self.goal_noise
         }
+
+def _pick_random_texture(texture_dir):
+    """Return a random image path from `texture_dir` or None if not available."""
+    try:
+        import os, random
+        if not os.path.isdir(texture_dir):
+            return None
+        exts = {'.png', '.jpg', '.jpeg'}
+        candidates = [os.path.join(texture_dir, f) for f in os.listdir(texture_dir)
+                      if os.path.splitext(f)[1].lower() in exts]
+        if not candidates:
+            return None
+        return random.choice(candidates)
+    except Exception:
+        return None
 
 class ClothEnvBullet(BulletClothEnv_):
     """Public class to mirror ClothEnv signature."""

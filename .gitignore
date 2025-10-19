@@ -64,3 +64,4 @@ submodules/**/mujoco_py/generated/_pyxbld_*/
 # Local config not meant for CI
 settings.json
 terminal.log
+assets/

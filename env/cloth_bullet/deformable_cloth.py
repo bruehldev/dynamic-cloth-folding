@@ -2,6 +2,7 @@
 
 import pybullet as p
 import numpy as np
+import os
 
 class DeformableCloth(object):
     def __init__(self, base_position, scale=0.15, mass=1.0, target_edge_length=None, mesh_path="cloth_z_up.obj", **kwargs):
@@ -131,3 +132,64 @@ class DeformableCloth(object):
     def set_color(self, rgba):
         self.color = list(map(float, rgba))  # cache for logging/obs if you want
         p.changeVisualShape(self.cloth_id, -1, rgbaColor=self.color)
+
+    @staticmethod
+    def _pick_random_texture(texture_dir):
+        """Return a random image path from `texture_dir` or None if not available."""
+        try:
+            import random, os
+            if not os.path.isdir(texture_dir):
+                return None
+            exts = {'.png', '.jpg', '.jpeg'}
+            candidates = [os.path.join(texture_dir, f) for f in os.listdir(texture_dir)
+                          if os.path.splitext(f)[1].lower() in exts]
+            if not candidates:
+                return None
+            return random.choice(candidates)
+        except Exception:
+            return None
+
+    def apply_appearance(self, randomization_kwargs=None):
+        """Apply texture (random if DR) and optional DR tint to this cloth.
+        Uses BULLET_DR via `randomization_kwargs['enable_dr']` (set in train.py).
+        """
+        rk = (randomization_kwargs or {})
+        enable_dr = bool(rk.get("enable_dr", True))
+        cloth_cfg = dict(rk.get("cloth", {}))
+
+        # Defaults; allow overrides via cloth.texture_dir / cloth.fallback_texture
+        template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mujoco_templates", "textures"))
+        fixed_path   = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "cloth", "cloth_z_up", "cube.png"))
+        template_dir = cloth_cfg.get("texture_dir", template_dir)
+        fixed_path   = cloth_cfg.get("fallback_texture", fixed_path)
+
+        tex_path = None
+        if enable_dr:
+            tex_path = self._pick_random_texture(template_dir)
+
+        if not tex_path:
+            tex_path = fixed_path
+
+        # Texture
+        self._texture_applied = False
+        try:
+            if tex_path and os.path.isfile(tex_path):
+                tex_id = p.loadTexture(tex_path)
+                p.changeVisualShape(self.cloth_id, -1, textureUniqueId=tex_id)
+                self._texture_applied = True
+        except Exception:
+            self._texture_applied = False
+
+        # Tint (materials_randomization) or white
+        self._tint_applied = False
+        try:
+            if enable_dr and rk.get("materials_randomization", False):
+                lo = np.array(cloth_cfg.get("color_lo", [0.8, 0.8, 0.8, 1.0]))
+                hi = np.array(cloth_cfg.get("color_hi", [1.0, 1.0, 1.0, 1.0]))
+                rgba = (np.random.uniform(lo, hi)).tolist()
+                p.changeVisualShape(self.cloth_id, -1, rgbaColor=rgba)
+                self._tint_applied = True
+            else:
+                p.changeVisualShape(self.cloth_id, -1, rgbaColor=[1.0, 1.0, 1.0, 1.0])
+        except Exception:
+            pass

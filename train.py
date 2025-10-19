@@ -233,8 +233,24 @@ def experiment(variant):
 
     # DR config (render size + cloth size randomization)
     rk = variant.setdefault('randomization_kwargs', {})
+    rk.setdefault('cloth', {})
+    rk['cloth']['texture_dir'] = 'env/mujoco_templates/textures'
+    rk['cloth']['fallback_texture'] = 'assets/cloth/cloth_z_up/cube.png'
+    rk['cloth']['color_lo'] = [0.7, 0.7, 0.7, 1.0]
+    rk['cloth']['color_hi'] = [1.0, 1.0, 1.0, 1.0]
+    rk['materials_randomization'] = True
     rk['render_size'] = [320, 240]  # W_render, H_render
     rk['cloth_size_range'] = [0.10, 0.20]
+
+    # Tell Bullet to use your MuJoCo mesh and lock the visible size
+    rk.setdefault('cloth', {})
+    rk['cloth']['mesh_path'] = 'assets/cloth/cape_n5.obj'
+    # Ensure Bullet rescales the mesh to match MuJoCo’s cloth_size each reset
+
+    # Ensure Bullet rescales the mesh to match MuJoCo’s cloth_size each reset
+    rk['mujoco_size_lock'] = True
+    rk['cloth_size'] = 0.3  # or whatever your MuJoCo cloth size is
+
     rk['table'] = {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
         "color_hi": [0.95, 0.90, 0.85, 1.0],
@@ -257,7 +273,6 @@ def experiment(variant):
     }
     rk['gravity_randomization'] = True
     rk['gravity_range'] = [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]]
-    # Master switch for Bullet DR (default ON). Override with: BULLET_DR=0 python train.py ...
     rk.setdefault('enable_dr', os.getenv('BULLET_DR', '1') == '1')
 
     eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
