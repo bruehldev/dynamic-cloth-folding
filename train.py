@@ -4,26 +4,22 @@ import torch
 torch.backends.cudnn.benchmark = True
 import gym
 from utils import general_utils
+from utils.training_overrides import apply_training_env_overrides
+from utils.env_wrappers import SanitizeObsWrapper, PostNormalizeSanitizer, wrap_env_with_sanitizer
+from utils.randomization import maybe_randomize
+from utils.collectors import LenientKeyPathCollector
+from utils.eval_setup import make_eval_suite
+from utils.trainer_patches import patch_get_diagnostics
 import copy
 import numpy as np
 import os
 BACKEND = os.getenv('PHYSICS', 'bullet').lower()
-SKIP_DR = os.getenv('NO_DR', '1') == '1'
 
 if BACKEND == 'bullet':
     from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
+    from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
 else:
     from env.cloth_env import ClothEnv
-def _maybe_randomize(wrapped_env, randomization_kwargs):
-    if SKIP_DR:
-        return wrapped_env
-    # MuJoCo-only: robosuite wrapper requires env.sim
-    backend = getattr(wrapped_env, "_backend_name", "").lower()
-    if backend in {"bullet", "pybullet"} or not hasattr(wrapped_env, "sim"):
-        # Bullet has its own DR via randomization_kwargs already
-        return wrapped_env
-    from utils import general_utils
-    return general_utils.get_randomized_env(wrapped_env, randomization_kwargs=randomization_kwargs)
 
 import logging
 from df_logging import RunLogger
@@ -45,179 +41,16 @@ pylog = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
 
-# ---- NaN/Inf protection for every Env (before NormalizedBoxEnv) -------------------
-import numpy as _np
-import gym as _gym
-
-class SanitizeObsWrapper(_gym.Wrapper):
-    """
-    Replaces NaN/Inf in all Dict observations & clips to sensible ranges.
-    Applies in both reset() and step().
-    """
-    def __init__(self, env, clip_dict=None):
-        super().__init__(env)
-        # optional clip limits per key; default: no clips
-        self.clip_dict = clip_dict or {}
-
-    def _clean(self, obs):
-        if isinstance(obs, dict):
-            out = {}
-            for k, v in obs.items():
-                arr = _np.asarray(v, dtype=_np.float32)
-                arr = _np.nan_to_num(arr, nan=0.0, posinf=1e3, neginf=-1e3)
-                low, high = self.clip_dict.get(k, (None, None))
-                if low is not None or high is not None:
-                    lo = -_np.inf if low is None else low
-                    hi = _np.inf if high is None else high
-                    arr = _np.clip(arr, lo, hi)
-                out[k] = arr
-            return out
-        else:
-            arr = _np.asarray(obs, dtype=_np.float32)
-            arr = _np.nan_to_num(arr, nan=0.0, posinf=1e3, neginf=-1e3)
-            return arr
-
-    def reset(self, **kwargs):
-        obs = self.env.reset(**kwargs)
-        return self._clean(obs)
-
-    def step(self, action):
-        obs, rew, done, info = self.env.step(action)
-        return self._clean(obs), float(rew), bool(done), info
-# -----------------------------------------------------------------------------
-
-
-class PostNormalizeSanitizer(_gym.Wrapper):
-    """Catches NaN/Inf that might be introduced by NormalizedBoxEnv."""
-    def _clean(self, obs):
-        if isinstance(obs, dict):
-            return {k: _np.nan_to_num(_np.asarray(v, _np.float32),
-                                      nan=0.0, posinf=1e3, neginf=-1e3)
-                    for k, v in obs.items()}
-        return _np.nan_to_num(_np.asarray(obs, _np.float32),
-                              nan=0.0, posinf=1e3, neginf=-1e3)
-
-    def reset(self, **kw):
-        return self._clean(self.env.reset(**kw))
-    def step(self, action):
-        o, r, d, i = self.env.step(action)
-        return self._clean(o), float(r), bool(d), i
-
-
-def _wrap_env_with_sanitizer(env):
-    # very conservative clips:
-    # - image: [0,1]
-    # - robot_observation/observation: [-1e3, 1e3]
-    clip_cfg = {
-        'image': (0.0, 1.0),
-        'robot_observation': (-1e3, 1e3),
-        'observation': (-1e3, 1e3),
-        'achieved_goal': (-1e3, 1e3),
-        'desired_goal': (-1e3, 1e3),
-    }
-    return SanitizeObsWrapper(env, clip_dict=clip_cfg)
-
-
-class LenientKeyPathCollector(data_collector.KeyPathCollector):
-    """
-    A KeyPathCollector adapted for GUI mode.
-    1. It ignores unexpected keyword arguments in `collect_new_paths`.
-    2. It ensures that observation data (obs, goal, etc.) is concatenated
-       into a single vector as expected by the policy.
-    """
-    def __init__(
-            self,
-            env,
-            policy,
-            observation_key='observation',
-            desired_goal_key='desired_goal',
-            **kwargs
-    ):
-        # Filter out unexpected kwargs that are only for VectorizedKeyPathCollector
-        import inspect
-        parent_init_spec = inspect.getfullargspec(super().__init__)
-        accepted_kwargs = {
-            k: v for k, v in kwargs.items()
-            if k in parent_init_spec.args or k in parent_init_spec.kwonlyargs
-        }
-        super().__init__(
-            env,
-            policy,
-            observation_key=observation_key,
-            desired_goal_key=desired_goal_key,
-            **accepted_kwargs
-        )
-
-    def _get_action_and_info(self, observation):
-        """
-        Takes the observation dictionary, concatenates the parts into a single
-        vector, and then gets the action from the policy.
-        """
-        # Build the flat observation vector as the policy expects it.
-        # The order is crucial and must match the configuration in
-        # `get_keys_and_dims`.
-        obs = np.hstack([
-            observation[key] for key in self._observation_key
-        ])
-        return self.policy.get_action(obs)
-
-    def collect_new_paths(self, max_path_length, num_steps, discard_incomplete_paths, **kwargs):
-        # Ignore the additional kwargs and call the parent method.
-        return super().collect_new_paths(
-            max_path_length=max_path_length,
-            num_steps=num_steps,
-            discard_incomplete_paths=discard_incomplete_paths,
-        )
-
-
 def experiment(variant):
+    # Keep a clean working copy
     variant = copy.deepcopy(variant)
+
+    # Apply run-time env overrides (SMOKE_TRAIN, EVAL_FREQ, NUM_PROCS, etc.)
+    variant = apply_training_env_overrides(variant)
 
     alg = variant.setdefault('algorithm_kwargs', {})
     pck = variant.setdefault('path_collector_kwargs', {})
     evk = variant.setdefault('eval_kwargs', {})
-
-    pck['num_processes'] = int(os.getenv("NUM_PROCS", "1"))
-
-    USE_SMOKE = os.getenv("SMOKE_TRAIN", "0") == "1"
-
-    # --- Debugging: Early evaluation and saving ---
-    # Example: export EVAL_FREQ=1000
-    eval_freq = os.getenv("EVAL_FREQ")
-    if eval_freq:
-        eval_freq = int(eval_freq)
-        alg['num_expl_steps_per_train_loop'] = max(eval_freq, alg['batch_size'])
-        alg['num_train_loops_per_epoch'] = 1
-        print(f"DEBUG: Evaluation frequency set to every {alg['num_expl_steps_per_train_loop']} steps.")
-    # ---------------------------------------------------------
-
-
-    if USE_SMOKE:
-        alg['num_epochs'] = 1
-        alg['num_train_loops_per_epoch'] = 1
-        alg['max_path_length'] = 50
-        alg['num_expl_steps_per_train_loop'] = 50
-        alg['num_trains_per_train_loop'] = 1
-        alg['min_num_steps_before_training'] = 0
-        alg['batch_size'] = 32
-        evk['num_runs'] = 1
-        print("DEBUG/effective hyperparams:", {k: alg[k] for k in (
-            'max_path_length','num_expl_steps_per_train_loop','num_trains_per_train_loop',
-            'min_num_steps_before_training','batch_size')})
-    if not USE_SMOKE:
-        # Only overwrite if environment variables are set - otherwise use variant/repo defaults
-        if "NUM_EPOCHS" in os.environ:
-            alg['num_epochs'] = int(os.environ["NUM_EPOCHS"])
-        if "EXPL_STEPS" in os.environ:
-            alg['num_expl_steps_per_train_loop'] = int(os.environ["EXPL_STEPS"])
-        if "NUM_UPDATES" in os.environ:
-            alg['num_trains_per_train_loop'] = int(os.environ["NUM_UPDATES"])
-        if "BATCH" in os.environ:
-            alg['batch_size'] = int(os.environ["BATCH"])
-
-        # Safety condition (with the final values - whether from repo default or override)
-        assert alg['batch_size'] <= alg['num_expl_steps_per_train_loop'], \
-            "batch_size must be <= num_expl_steps_per_train_loop"
 
     # 1) Run-specific log folder under save_folder
     run_log_dir = os.path.join(variant["save_folder"], "logs")
@@ -231,76 +64,28 @@ def experiment(variant):
         env_kwargs['has_viewer'] = True
     env_kwargs['logger'] = runlog
 
-    # DR config (render size + cloth size randomization)
-    rk = variant.setdefault('randomization_kwargs', {})
-    rk.setdefault('cloth', {})
-    rk['cloth']['texture_dir'] = 'env/mujoco_templates/textures'
-    rk['cloth']['fallback_texture'] = 'assets/cloth/cloth_z_up/cube.png'
-    rk['cloth']['color_lo'] = [0.7, 0.7, 0.7, 1.0]
-    rk['cloth']['color_hi'] = [1.0, 1.0, 1.0, 1.0]
-    rk['materials_randomization'] = True
-    rk['render_size'] = [320, 240]  # W_render, H_render
-    rk['cloth_size_range'] = [0.10, 0.20]
-
-    # Tell Bullet to use your MuJoCo mesh and lock the visible size
-    rk.setdefault('cloth', {})
-    rk['cloth']['mesh_path'] = 'assets/cloth/mj_square_n7_v49_f72_complex1.obj'
-    rk['cloth']['uv'] = {
-        'repeat': [1, 1],
-        'rotate_deg': 0.0,
-        'offset_frac': [0.0, 0.0],
-        'repeat_x_range': [1, 1],
-        'repeat_y_range': [1, 1],
-        'rotate_deg_range': [0, 0],
-        'offset_frac_range': [[0.0, 0.0], [0.0, 0.0]],  # keep zero to avoid preprocessing
-    }
-    # Skip heavy image preprocessing unless you explicitly enable it
-    rk['cloth']['preprocess_textures'] = True
-    rk['show_depth_preview'] = 1
-    rk['show_seg_preview'] = 1
-
-    # Ensure Bullet rescales the mesh to match MuJoCo’s cloth_size each reset
-    rk['mujoco_size_lock'] = True
-    rk['cloth_size'] = 0.3  # or whatever your MuJoCo cloth size is
-
-    rk['table'] = {
-        "color_lo": [0.55, 0.45, 0.35, 1.0],
-        "color_hi": [0.95, 0.90, 0.85, 1.0],
-        "lateral_friction_range": [0.5, 1.2],
-        "restitution_range": [0.0, 0.2],
-    }
-    rk['floor'] = {
-        "color_lo": [0.25, 0.25, 0.25, 1.0],
-        "color_hi": [0.85, 0.85, 0.85, 1.0],
-    }
-    rk['dynamics_randomization'] = True
-    rk['physics'] = {
-        "erp_range": [0.15, 0.35],
-        "contact_erp_range": [0.15, 0.35],
-        "global_cfm_range": [0.0, 1e-3],
-        "solver_iters_range": [120, 200],
-        "residual_thresh_range": [1e-6, 1e-4],
-        "restitution_vel_thresh_range": [0.0, 0.5],
-        "contact_breaking_threshold_range": [0.02, 0.08],
-    }
-    rk['gravity_randomization'] = True
-    rk['gravity_range'] = [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]]
-    rk.setdefault('enable_dr', os.getenv('BULLET_DR', '1') == '1')
-    rk['cloth']['friction_range'] = [1.5, 3.5]
-    rk['table']['lateral_friction_range'] = [1.0, 2.5]
-    rk['table']['rolling_friction_range'] = [0.0005, 0.003]
-    rk['table']['spinning_friction_range'] = [0.0005, 0.003]
+    # Domain Randomization config:
+    # - Bullet: build from a single, centralized source (with variant overrides if provided)
+    # - MuJoCo: keep variant['randomization_kwargs'] as-is and use maybe_randomize()
+    if BACKEND == 'bullet':
+        variant['randomization_kwargs'] = make_bullet_randomization_kwargs(
+            enable_dr=None,  # respect NO_DR; default is DR ON unless NO_DR=1
+            overrides=variant.get('randomization_kwargs', None)
+        )
+    else:
+        # Ensure a dict exists for MuJoCo path (camera config, etc. live here)
+        variant.setdefault('randomization_kwargs', {})
 
     eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
     print("PHYSICS backend:", getattr(eval_env, "_backend_name", "unknown"),
           "| class:", type(eval_env).__name__)
 
     # Sanitize -> Normalize -> Sanitize (Post)
-    eval_env = _wrap_env_with_sanitizer(eval_env)
+    eval_env = wrap_env_with_sanitizer(eval_env)
     eval_env = wrappers.NormalizedBoxEnv(eval_env)
     eval_env = PostNormalizeSanitizer(eval_env)
 
-    randomized_eval_env = _maybe_randomize(
+    randomized_eval_env = maybe_randomize(
         eval_env, randomization_kwargs=variant['randomization_kwargs']
     )
 
@@ -338,26 +123,10 @@ def experiment(variant):
 
     eval_policy = sac_policies.MakeDeterministic(policy)
 
-    success_test = success_rate_test.SuccessRateTest(
-        env=randomized_eval_env,
-        policy=eval_policy,
-        keys=env_keys,
-        name='randomized_cloth',
-        metric_keys=['success_rate', 'corner_distance', 'corner_0',
-                     'corner_1', 'corner_2', 'corner_3', 'corner_sum_error'],
-        **variant['eval_kwargs'],
+    # Build evaluation suite (success + real-corner tests)
+    evaluation_suite = make_eval_suite(
+        randomized_eval_env, eval_policy, env_keys, variant
     )
-    real_corner_test = real_corner_prediction_test.RealCornerPredictionTest(
-        env=randomized_eval_env,
-        policy=eval_policy,
-        keys=env_keys,
-        name='real_corner_error',
-        metric_keys=[
-            'corner_error'],
-        **variant['eval_kwargs'],)
-
-    evaluation_suite = eval_suite.EvalTestSuite(
-        tests=[success_test, real_corner_test])
 
     # --- Worker environment factory: Each subprocess gets its own RunLogger ---
     # BUT: If GUI is on, we want to see the exploration in the main process.
@@ -383,11 +152,11 @@ def experiment(variant):
                 base_env = ClothEnv(**envkw, randomization_kwargs=variant['randomization_kwargs'])
                 print("[worker] backend:", getattr(base_env, "_backend_name", "unknown"), "| class:", type(base_env).__name__)
 
-                base_env = _wrap_env_with_sanitizer(base_env)
+                base_env = wrap_env_with_sanitizer(base_env)
                 base_env = wrappers.NormalizedBoxEnv(base_env)
                 base_env = PostNormalizeSanitizer(base_env)
 
-                return _maybe_randomize(base_env, randomization_kwargs=variant['randomization_kwargs'])
+                return maybe_randomize(base_env, randomization_kwargs=variant['randomization_kwargs'])
             return _fn
 
         env_functions = [make_worker_env_function() for _ in range(
@@ -425,18 +194,8 @@ def experiment(variant):
     )
 
     trainer = her.ClothSacHERTrainer(base_trainer)
-
-    orig_get_diag = getattr(trainer, "get_diagnostics", None)
-
-    def _patched_get_diagnostics():
-        d = {}
-        if callable(orig_get_diag):
-            d = orig_get_diag() or {}
-        # Append counter from the inner SACTrainer
-        d["num train calls"] = getattr(base_trainer, "_n_train_steps_total", 0)
-        return d
-
-    trainer.get_diagnostics = _patched_get_diagnostics
+    # Add 'num train calls' to diagnostics
+    patch_get_diagnostics(trainer, base_trainer)
 
     algorithm = torch_rl_algorithm.TorchBatchRLAlgorithm(
         eval_suite=evaluation_suite,

@@ -14,21 +14,8 @@ from env.cloth_bullet.deformable_cloth import DeformableCloth
 from env.cloth_bullet.folding_task import FoldingTask
 from env.cloth_bullet.camera import Camera
 import albumentations as A
-#utils/mujoco_model_kwargs.py
-from utils import mujoco_model_kwargs as mjk
-
-def _rand(a, b): 
-    return float(np.random.uniform(a, b))
-
-def _sample_color_from_range(prefix: str):
-    r1 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_r_1"])
-    g1 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_g_1"])
-    b1 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_b_1"])
-    r2 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_r_2"])
-    g2 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_g_2"])
-    b2 = _rand(*mjk.appearance_kwarg_ranges[f"{prefix}_texture_b_2"])
-    # collapse the 2-tone MuJoCo texture into a flat Bullet color
-    return [(r1 + r2) / 2.0, (g1 + g2) / 2.0, (b1 + b2) / 2.0, 1.0]
+# NOTE: Do not import mujoco_model_kwargs here.
+# Bullet appearance comes solely from randomization_kwargs passed in.
 
 
 # optional logging
