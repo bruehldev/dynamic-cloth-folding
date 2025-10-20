@@ -19,6 +19,8 @@ class PyBulletWorld(object):
         self.gravity = float(self.gravity_vec[2])  # used by get_obs
         self.table_lateral_friction = 0.8
         self.table_restitution = 0.1
+        self.table_rolling_friction = 0.001
+        self.table_spinning_friction = 0.001
 
     def reset(self):
         p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
@@ -46,6 +48,8 @@ class PyBulletWorld(object):
         # --- NEW: apply current cached dynamics to the freshly created table ---
         p.changeDynamics(self.table_id, -1,
                          lateralFriction=self.table_lateral_friction,
+                         rollingFriction=self.table_rolling_friction,
+                         spinningFriction=self.table_spinning_friction,
                          restitution=self.table_restitution)
 
         if self.has_viewer:
@@ -91,8 +95,12 @@ class PyBulletWorld(object):
                                                            self.table_restitution])
             self.table_lateral_friction = float(np.random.uniform(lat_lo, lat_hi))
             self.table_restitution = float(np.random.uniform(res_lo, res_hi))
+            self.table_rolling_friction = float(np.random.uniform(*tab.get("rolling_friction_range", [self.table_rolling_friction]*2)))
+            self.table_spinning_friction = float(np.random.uniform(*tab.get("spinning_friction_range", [self.table_spinning_friction]*2)))
             p.changeDynamics(self.table_id, -1,
                              lateralFriction=self.table_lateral_friction,
+                             rollingFriction=self.table_rolling_friction,
+                             spinningFriction=self.table_spinning_friction,
                              restitution=self.table_restitution)
 
         # ---- Floor color (optional) ----
@@ -124,7 +132,7 @@ class PyBulletWorld(object):
             # widely supported
             "erp": float(np.random.uniform(*phys.get("erp_range", [0.1, 0.4]))),
             "contactERP": float(np.random.uniform(*phys.get("contact_erp_range", [0.1, 0.4]))),
-            "numSolverIterations": int(np.random.uniform(*phys.get("solver_iters_range", [50, 150]))),
+            "numSolverIterations": int(np.random.uniform(*phys.get("solver_iters_range", [120, 200]))),
             # often available (best-effort; safe to ignore if missing)
             "globalCFM": float(np.random.uniform(*phys.get("global_cfm_range", [0.0, 1e-3]))),
             "solverResidualThreshold": float(np.random.uniform(*phys.get("residual_thresh_range", [1e-7, 1e-3]))),

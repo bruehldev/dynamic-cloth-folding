@@ -163,7 +163,7 @@ class BulletClothEnv_(object):
             rob_cfg = (self.randomization_kwargs or {}).get("robot", {})
             _lin = float(np.random.uniform(*rob_cfg.get("lin_damping_range", [0.0, 0.2])))
             _ang = float(np.random.uniform(*rob_cfg.get("ang_damping_range", [0.0, 0.2])))
-            _frc = float(np.random.uniform(*rob_cfg.get("lateral_friction_range", [0.6, 1.2])))
+            _frc = float(np.random.uniform(*rob_cfg.get("lateral_friction_range", [1.5, 3.5])))
             # Prefer the PandaRobot helper if present; call positionally for max compatibility.
             try:
                 if hasattr(self.robot, "randomize_dynamics"):
@@ -204,10 +204,10 @@ class BulletClothEnv_(object):
         base_clearance = 0.05
         extra_clearance = max(0.0, (scale_guess - 0.26)) * 0.35  # gentle slope
         cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
-
+        fr_range = cloth_cfg.get("friction_range", [1.5, 3.5]) 
         cloth_kwargs = dict(
             scale=scale_guess,
-            mass=float(cloth_cfg.get("mass", 0.35)),
+            mass=float(cloth_cfg.get("mass", 0.5)),
             useNeoHookean=int(cloth_cfg.get("useNeoHookean", 0)),
             useBendingSprings=int(cloth_cfg.get("useBendingSprings", 1)),
             useMassSpring=int(cloth_cfg.get("useMassSpring", 1)),
@@ -215,7 +215,7 @@ class BulletClothEnv_(object):
             springDampingStiffness=float(np.random.uniform(*cloth_cfg.get("spring_c_range", [0.05, 0.2]))),
             springDampingAllDirections=int(cloth_cfg.get("damping_all_dirs", 1)),
             useSelfCollision=int(cloth_cfg.get("useSelfCollision", 1)),
-            frictionCoeff=float(np.random.uniform(*cloth_cfg.get("friction_range", [0.3, 1.0]))),
+            frictionCoeff=float(np.random.uniform(*fr_range)),
             useFaceContact=int(cloth_cfg.get("useFaceContact", 1)),
         )
         # No target_edge_length yet (DeformableCloth ignores it in current code)
@@ -327,11 +327,20 @@ class BulletClothEnv_(object):
         desired_pos_step_W = previous_desired_pos_step_W + action
         self.desired_pos_step_W = np.clip(desired_pos_step_W, self.min_absolute_W, self.max_absolute_W)
 
+        # --- Lift-then-fold arc motion ---
+        table_z = self.world.get_table_top_z()
+        # t increases as the gripper moves away from its starting XY position
+        t = np.clip(np.linalg.norm(self.desired_pos_step_W[:2] - self.relative_origin[:2]) / 0.25, 0.0, 1.0)
+        z_start = table_z + 0.03  # Initial height close to the table
+        z_end = table_z + 0.10    # Peak height of the arc
+        self.desired_pos_step_W[2] = (1 - t) * z_start + t * z_end
+        # --- End of arc motion logic ---
+
         for i in range(self.substeps):
             alpha = (i + 1) / self.substeps
             self.desired_pos_ctrl_W = (1 - alpha) * previous_desired_pos_step_W + alpha * self.desired_pos_step_W
             
-            joint_positions = self.robot.calculate_ik(self.desired_pos_step_W)
+            joint_positions = self.robot.calculate_ik(self.desired_pos_ctrl_W)
             self.robot.apply_joint_positions(joint_positions)
             self.robot.force_fingers_closed()
             self.world.step()

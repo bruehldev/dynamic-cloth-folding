@@ -244,7 +244,7 @@ def experiment(variant):
 
     # Tell Bullet to use your MuJoCo mesh and lock the visible size
     rk.setdefault('cloth', {})
-    rk['cloth']['mesh_path'] = 'assets/cloth/mj_square_n5_v25_f32_complex0.obj'
+    rk['cloth']['mesh_path'] = 'assets/cloth/mj_square_n7_v49_f72_complex1.obj'
     rk['cloth']['uv'] = {
         'repeat': [1, 1],
         'rotate_deg': 0.0,
@@ -278,7 +278,7 @@ def experiment(variant):
         "erp_range": [0.15, 0.35],
         "contact_erp_range": [0.15, 0.35],
         "global_cfm_range": [0.0, 1e-3],
-        "solver_iters_range": [80, 140],
+        "solver_iters_range": [120, 200],
         "residual_thresh_range": [1e-6, 1e-4],
         "restitution_vel_thresh_range": [0.0, 0.5],
         "contact_breaking_threshold_range": [0.02, 0.08],
@@ -286,6 +286,10 @@ def experiment(variant):
     rk['gravity_randomization'] = True
     rk['gravity_range'] = [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]]
     rk.setdefault('enable_dr', os.getenv('BULLET_DR', '1') == '1')
+    rk['cloth']['friction_range'] = [1.5, 3.5]
+    rk['table']['lateral_friction_range'] = [1.0, 2.5]
+    rk['table']['rolling_friction_range'] = [0.0005, 0.003]
+    rk['table']['spinning_friction_range'] = [0.0005, 0.003]
 
     eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant['randomization_kwargs'])
     print("PHYSICS backend:", getattr(eval_env, "_backend_name", "unknown"),

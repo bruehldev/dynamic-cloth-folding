@@ -40,7 +40,7 @@ class DeformableCloth(object):
             try: p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             except Exception: pass
             body_id = p.loadSoftBody(
-                mesh_path,               
+                mesh_path,
                 basePosition=base_position,
                 scale=scale_val,
                 mass=mass,
@@ -53,6 +53,7 @@ class DeformableCloth(object):
                 useSelfCollision=kwargs.get("useSelfCollision", 1),
                 frictionCoeff=kwargs.get("frictionCoeff", 0.8),
                 useFaceContact=kwargs.get("useFaceContact", 1),
+                collisionMargin=kwargs.get("collisionMargin", 0.01),
             )
             # Do NOT re-enable here; the env will enable at the very end of reset.
             return body_id
