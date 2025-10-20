@@ -244,7 +244,7 @@ def experiment(variant):
 
     # Tell Bullet to use your MuJoCo mesh and lock the visible size
     rk.setdefault('cloth', {})
-    rk['cloth']['mesh_path'] = 'assets/cloth/cape_n5.obj'
+    rk['cloth']['mesh_path'] = 'assets/cloth/mj_square_n5_v25_f32_complex0.obj'
     rk['cloth']['uv'] = {
         'repeat': [1, 1],
         'rotate_deg': 0.0,
