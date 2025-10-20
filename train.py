@@ -245,7 +245,19 @@ def experiment(variant):
     # Tell Bullet to use your MuJoCo mesh and lock the visible size
     rk.setdefault('cloth', {})
     rk['cloth']['mesh_path'] = 'assets/cloth/cape_n5.obj'
-    # Ensure Bullet rescales the mesh to match MuJoCo’s cloth_size each reset
+    rk['cloth']['uv'] = {
+        'repeat': [1, 1],
+        'rotate_deg': 0.0,
+        'offset_frac': [0.0, 0.0],
+        'repeat_x_range': [1, 1],
+        'repeat_y_range': [1, 1],
+        'rotate_deg_range': [0, 0],
+        'offset_frac_range': [[0.0, 0.0], [0.0, 0.0]],  # keep zero to avoid preprocessing
+    }
+    # Skip heavy image preprocessing unless you explicitly enable it
+    rk['cloth']['preprocess_textures'] = True
+    rk['show_depth_preview'] = 1
+    rk['show_seg_preview'] = 1
 
     # Ensure Bullet rescales the mesh to match MuJoCo’s cloth_size each reset
     rk['mujoco_size_lock'] = True

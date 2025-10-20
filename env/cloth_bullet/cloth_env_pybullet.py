@@ -143,6 +143,13 @@ class BulletClothEnv_(object):
 
     def reset(self):
         self.current_step = 0
+        # Hide intermediate loads & speed up reset (single guard)
+        try:
+            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
+            p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
+            p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
+            p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
+        except Exception: pass
         self.episode_ee_close_steps = 0
         self.world.reset()
         enable_dr = (self.randomization_kwargs or {}).get("enable_dr", True)
@@ -230,9 +237,7 @@ class BulletClothEnv_(object):
         mujoco_lookatbody = np.array([0.49476399, 0.00668401, 0.13310541], dtype=np.float32)
         self._fixed_camera_target = mujoco_lookatbody
         self.camera.begin_episode(self._fixed_camera_target)
-        if self.has_viewer:
-            p.resetDebugVisualizerCamera(cameraDistance=1.2, cameraYaw=30, cameraPitch=-30, cameraTargetPosition=self._fixed_camera_target)
-            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
+        # (Keep rendering OFF until the end of reset)
 
         # Initialize the task
         self.task = FoldingTask(
@@ -271,7 +276,7 @@ class BulletClothEnv_(object):
         # Set goal for the episode
         self.goal, self.goal_noise = self.task.sample_goal(self.get_cloth_position_I(), self.cloth.sites)
 
-        # Capture initial image
+        # Capture initial image (viewer can stay off; camera grabs directly)
         img = self.camera.capture_image(self._fixed_camera_target)
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
@@ -283,6 +288,29 @@ class BulletClothEnv_(object):
             hi = np.array(cloth_cfg.get("color_hi", [1.0,1.0,1.0,1.0]))
             p.changeVisualShape(self.cloth.cloth_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist())
 
+        # Now show the fully initialized scene (single switch at the very end)
+        try:
+            if self.has_viewer:
+                p.resetDebugVisualizerCamera(
+                    cameraDistance=1.2, cameraYaw=30, cameraPitch=-30,
+                    cameraTargetPosition=self._fixed_camera_target
+                )
+            # Turn rendering back on…
+            p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
+            # …and re-enable preview panes (RGB on by default; depth/seg off unless requested)
+            if self.has_viewer:
+                p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
+                p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
+                p.configureDebugVisualizer(
+                    p.COV_ENABLE_DEPTH_BUFFER_PREVIEW,
+                    int(self.randomization_kwargs.get("show_depth_preview", 0))
+                )
+                p.configureDebugVisualizer(
+                    p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW,
+                    int(self.randomization_kwargs.get("show_seg_preview", 0))
+                )
+        except Exception:
+            pass
         return self.get_obs()
 
     def step(self, action):
