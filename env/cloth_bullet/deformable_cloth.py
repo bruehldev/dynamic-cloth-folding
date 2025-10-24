@@ -1,9 +1,14 @@
 # deformable_cloth.py
 
-import pybullet as p
-import numpy as np
+import contextlib
+import hashlib
 import os
-from PIL import Image, ImageChops, PngImagePlugin, TiffImagePlugin, JpegImagePlugin, ImageFile
+import tempfile
+
+import numpy as np
+import pybullet as p
+from PIL import Image, ImageChops, ImageFile, JpegImagePlugin, PngImagePlugin, TiffImagePlugin
+
 # Disable PIL decoder debug spam
 try:
     Image.DEBUG = 0
@@ -18,27 +23,37 @@ except Exception:
 # Texture caches to speed up DR textures
 _TEXTURE_CACHE = {}
 _TEXTURE_ID_CACHE = {}
-_CANDIDATES_CACHE = {}   # texture_dir -> [paths]
-import hashlib, tempfile
+_CANDIDATES_CACHE = {}  # texture_dir -> [paths]
+
 
 def _cache_key(tex_path, rep, rot_deg, off):
     h = hashlib.sha1()
-    h.update(str(tex_path).encode('utf-8'))
-    h.update(str(tuple(rep)).encode('utf-8'))
-    h.update(('{:.4f}'.format(float(rot_deg))).encode('utf-8'))
-    h.update(str(tuple([float(off[0]), float(off[1])])).encode('utf-8'))
+    h.update(str(tex_path).encode("utf-8"))
+    h.update(str(tuple(rep)).encode("utf-8"))
+    h.update((f"{float(rot_deg):.4f}").encode())
+    h.update(str(tuple([float(off[0]), float(off[1])])).encode("utf-8"))
     return h.hexdigest()
 
-class DeformableCloth(object):
-    def __init__(self, base_position, scale=0.15, mass=1.0, target_edge_length=None, mesh_path="cloth_z_up.obj", **kwargs):
+
+class DeformableCloth:
+    def __init__(
+        self,
+        base_position,
+        scale=0.15,
+        mass=1.0,
+        target_edge_length=None,
+        mesh_path="cloth_z_up.obj",
+        **kwargs,
+    ):
         """
         If target_edge_length is given (meters), the cloth is scaled so that
         its XY edge length matches target_edge_length (MuJoCo's cloth_size).
         """
+
         def _load(scale_val):
             # Hard render guard: ensure GUI can't draw while spawning the soft body
-            try: p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
-            except Exception: pass
+            with contextlib.suppress(Exception):
+                p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             body_id = p.loadSoftBody(
                 mesh_path,
                 basePosition=base_position,
@@ -71,18 +86,20 @@ class DeformableCloth(object):
                 span_y = aabb_max[1] - aabb_min[1]
                 current_edge = max(span_x, span_y)
                 current_edge = current_edge if current_edge > 1e-6 else 1e-6
-                desired_scale = (float(target_edge_length) / current_edge) * (scale if scale is not None else 1.0)
+                desired_scale = (float(target_edge_length) / current_edge) * (
+                    scale if scale is not None else 1.0
+                )
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     p.removeBody(_temp_id)
-                except Exception:
-                    pass
             # Stage 2: reload with the exact scale
             self.cloth_id = _load(desired_scale)
             used_scale = float(desired_scale)
 
         # Visible spawn (rendering is still OFF due to the guard; env re-enables later)
-        p.changeVisualShape(self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1.0])
+        p.changeVisualShape(
+            self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1.0]
+        )
 
         # keep original mesh path for MTL parsing / logging
         self.mesh_path = mesh_path
@@ -129,13 +146,20 @@ class DeformableCloth(object):
         min_y, max_y = verts[:, 1].min(), verts[:, 1].max()
 
         targets = {
-            "top_left": (min_x, max_y), "top_right": (max_x, max_y),
-            "bottom_left": (min_x, min_y), "bottom_right": (max_x, min_y)
+            "top_left": (min_x, max_y),
+            "top_right": (max_x, max_y),
+            "bottom_left": (min_x, min_y),
+            "bottom_right": (max_x, min_y),
         }
-        dist2 = lambda v, t: (v[0] - t[0])**2 + (v[1] - t[1])**2
-        
-        self.corner_vertex_ids = {name: min(range(len(verts)), key=lambda i: dist2(verts[i], t)) for name, t in targets.items()}
-        
+
+        def dist2(v, t):
+            return (v[0] - t[0]) ** 2 + (v[1] - t[1]) ** 2
+
+        self.corner_vertex_ids = {
+            name: min(range(len(verts)), key=lambda i: dist2(verts[i], t))
+            for name, t in targets.items()
+        }
+
         # Mapping for compatibility with existing code that uses "0", "1", etc.
         self.corner_v_names = {
             "0": f"v_{self.corner_vertex_ids['top_right']}",
@@ -145,23 +169,24 @@ class DeformableCloth(object):
         }
 
     def compute_sites(self, n=9):
-        """Creates a grid of logical sites (e.g., 'S0_0') mapped to the nearest vertex names (e.g., 'v_123')."""
+        """Creates a grid of logical sites (e.g., 'S0_0') mapped to the nearest vertex names
+        (e.g., 'v_123')."""
         verts = self.get_raw_vertex_positions()
         mins, maxs = verts.min(axis=0), verts.max(axis=0)
         xs = np.linspace(mins[0], maxs[0], n)
         ys = np.linspace(mins[1], maxs[1], n)
-        
+
         sites = {}
         xy = verts[:, :2]
         for r, y in enumerate(ys):
             for c, x in enumerate(xs):
-                d2 = (xy[:, 0] - x)**2 + (xy[:, 1] - y)**2
+                d2 = (xy[:, 0] - x) ** 2 + (xy[:, 1] - y) ** 2
                 sites[f"S{r}_{c}"] = f"v_{int(np.argmin(d2))}"
         self.sites = sites
 
     def create_anchor(self, vertex_name, robot_id, link_id):
         """Creates a soft body anchor between a cloth vertex and a robot link."""
-        vertex_index = int(vertex_name.split('_')[1])
+        vertex_index = int(vertex_name.split("_")[1])
         p.createSoftBodyAnchor(self.cloth_id, vertex_index, robot_id, link_id, [0, 0, 0])
 
     def set_color(self, rgba):
@@ -172,14 +197,19 @@ class DeformableCloth(object):
     def _pick_random_texture(texture_dir):
         """Return a random image path from `texture_dir` or None if not available."""
         try:
-            import random, os
+            import os
+            import random
+
             if not os.path.isdir(texture_dir):
                 return None
-            exts = {'.png', '.jpg', '.jpeg'}
+            exts = {".png", ".jpg", ".jpeg"}
             candidates = _CANDIDATES_CACHE.get(texture_dir)
             if candidates is None:
-                candidates = [os.path.join(texture_dir, f) for f in os.listdir(texture_dir)
-                              if os.path.splitext(f)[1].lower() in exts]
+                candidates = [
+                    os.path.join(texture_dir, f)
+                    for f in os.listdir(texture_dir)
+                    if os.path.splitext(f)[1].lower() in exts
+                ]
                 _CANDIDATES_CACHE[texture_dir] = candidates
             if not candidates:
                 return None
@@ -196,7 +226,7 @@ class DeformableCloth(object):
             mtl_path = base + ".mtl"
             if not os.path.isfile(mtl_path):
                 return None
-            with open(mtl_path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(mtl_path, encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     line = line.strip()
                     if line.lower().startswith("map_kd"):
@@ -213,16 +243,22 @@ class DeformableCloth(object):
         """Apply texture (random if DR) and optional DR tint to this cloth.
         Uses BULLET_DR via `randomization_kwargs['enable_dr']` (set in train.py).
         """
-        rk = (randomization_kwargs or {})
+        rk = randomization_kwargs or {}
         enable_dr = bool(rk.get("enable_dr", True))
         cloth_cfg = dict(rk.get("cloth", {}))
 
         # Defaults; allow overrides via cloth.texture_dir / cloth.fallback_texture
-        template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mujoco_templates", "textures"))
-        fixed_path   = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "cloth", "cloth_z_up", "cube.png"))
+        template_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "mujoco_templates", "textures")
+        )
+        fixed_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "..", "..", "assets", "cloth", "cloth_z_up", "cube.png"
+            )
+        )
         template_dir = cloth_cfg.get("texture_dir", template_dir)
         # If no explicit fallback, try .mtl's map_Kd next to the mesh
-        fixed_path   = cloth_cfg.get("fallback_texture", (self._mtl_map_kd() or fixed_path))
+        fixed_path = cloth_cfg.get("fallback_texture", (self._mtl_map_kd() or fixed_path))
 
         tex_path = None
         if enable_dr:
@@ -240,10 +276,12 @@ class DeformableCloth(object):
                 uv_cfg = dict(cloth_cfg.get("uv", {}))
                 # defaults + DR ranges
                 if preprocess:
-                    rep = uv_cfg.get("repeat", None)
+                    rep = uv_cfg.get("repeat")
                     if rep is None and enable_dr:
-                        rep = [int(np.random.uniform(*uv_cfg.get("repeat_x_range", [2, 5]))),
-                               int(np.random.uniform(*uv_cfg.get("repeat_y_range", [2, 5])))]
+                        rep = [
+                            int(np.random.uniform(*uv_cfg.get("repeat_x_range", [2, 5]))),
+                            int(np.random.uniform(*uv_cfg.get("repeat_y_range", [2, 5]))),
+                        ]
                     elif rep is None:
                         rep = [1, 1]
                     rep = [max(1, min(4, int(rep[0]))), max(1, min(4, int(rep[1])))]  # clamp
@@ -258,19 +296,27 @@ class DeformableCloth(object):
                         off = [float(ox), float(oy)]
                 else:
                     # Fast path: no image processing, reuse raw file
-                    rep = [1, 1]; rot_deg = 0.0; off = [0.0, 0.0]
+                    rep = [1, 1]
+                    rot_deg = 0.0
+                    off = [0.0, 0.0]
 
                 # Log UV params
                 uv_msg = {"repeat": rep, "rotate_deg": rot_deg, "offset_frac": off}
                 try:
-                    logger = getattr(self, 'logger', None)
-                    if logger and hasattr(logger, 'log'):
+                    logger = getattr(self, "logger", None)
+                    if logger and hasattr(logger, "log"):
                         logger.log("LOG:cloth_uv_params", uv_msg)
                 except Exception:
                     pass
 
                 # Build/reuse preprocessed file only if requested and needed
-                need_pre = preprocess and (rep[0] != 1 or rep[1] != 1 or abs(rot_deg) > 1e-3 or abs(off[0]) > 1e-6 or abs(off[1]) > 1e-6)
+                need_pre = preprocess and (
+                    rep[0] != 1
+                    or rep[1] != 1
+                    or abs(rot_deg) > 1e-3
+                    or abs(off[0]) > 1e-6
+                    or abs(off[1]) > 1e-6
+                )
                 _path_to_load = tex_path
                 if need_pre:
                     try:
@@ -279,9 +325,9 @@ class DeformableCloth(object):
                         if cached and os.path.isfile(cached):
                             _path_to_load = cached
                         else:
-                            base = Image.open(tex_path).convert('RGB')
+                            base = Image.open(tex_path).convert("RGB")
                             tile = self._build_wrapped_rotated_tile(base, rep, rot_deg, off)
-                            cache_dir = os.path.join(tempfile.gettempdir(), 'cloth_tex_cache')
+                            cache_dir = os.path.join(tempfile.gettempdir(), "cloth_tex_cache")
                             os.makedirs(cache_dir, exist_ok=True)
                             out_path = os.path.join(cache_dir, f"{key}.png")
                             tile.save(out_path)
@@ -316,19 +362,19 @@ class DeformableCloth(object):
         """Tile, rotate with wrap-around (avoid black corners), then offset."""
         # Build tiled image
         w, h = base_img.size
-        tile = Image.new('RGB', (w * rep[0], h * rep[1]))
+        tile = Image.new("RGB", (w * rep[0], h * rep[1]))
         for i in range(rep[0]):
             for j in range(rep[1]):
                 tile.paste(base_img, (i * w, j * h))
         # Rotate using 3x3 wrap to avoid black borders
         if abs(rot_deg) > 1e-3:
-            big = Image.new('RGB', (tile.size[0]*3, tile.size[1]*3))
-            for dx in (-1,0,1):
-                for dy in (-1,0,1):
-                    big.paste(tile, ((dx+1)*tile.size[0], (dy+1)*tile.size[1]))
+            big = Image.new("RGB", (tile.size[0] * 3, tile.size[1] * 3))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    big.paste(tile, ((dx + 1) * tile.size[0], (dy + 1) * tile.size[1]))
             big = big.rotate(rot_deg, expand=False, resample=Image.BILINEAR)
             x0, y0 = tile.size[0], tile.size[1]
-            tile = big.crop((x0, y0, x0*2, y0*2))
+            tile = big.crop((x0, y0, x0 * 2, y0 * 2))
         # Offset wrap
         if off[0] or off[1]:
             sx = int((off[0] % 1.0) * tile.size[0])

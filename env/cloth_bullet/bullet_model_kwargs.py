@@ -1,26 +1,22 @@
 # env/cloth_bullet/bullet_model_kwargs.py
-from copy import deepcopy
 import os
-from typing import Optional, Dict, Any
+from copy import deepcopy
+from typing import Any, Dict, Optional
 
 # Default DR configuration for the Bullet backend.
 _DEFAULTS = {
     # master toggle (set at runtime in make_bullet_randomization_kwargs)
     "enable_dr": True,
-
     # image & rendering
-    "render_size": [320, 240],           # [W, H]
+    "render_size": [320, 240],  # [W, H]
     "show_depth_preview": 1,
     "show_seg_preview": 1,
-
     # appearance DR (textures/tints)
     "materials_randomization": True,
-
     # geometry sizing (global fallback used by cloth if cloth.scale_range is missing)
-    "cloth_size_range": [0.10, 0.20],    # used when DR is ON
-    "cloth_size": 0.30,                  # deterministic fallback used when DR is OFF
-    "mujoco_size_lock": True,            # keep Bullet cloth visually consistent with MuJoCo cloth_size
-
+    "cloth_size_range": [0.10, 0.20],  # used when DR is ON
+    "cloth_size": 0.30,  # deterministic fallback used when DR is OFF
+    "mujoco_size_lock": True,  # keep Bullet cloth visually consistent with MuJoCo cloth_size
     # per-object sections
     "cloth": {
         # mesh + UV for using your MuJoCo cloth in Bullet
@@ -34,14 +30,12 @@ _DEFAULTS = {
             "rotate_deg_range": [0, 0],
             "offset_frac_range": [[0.0, 0.0], [0.0, 0.0]],
         },
-
         # textures & colors
         "texture_dir": "env/mujoco_templates/textures",
         "fallback_texture": "assets/cloth/cloth_z_up/cube.png",
         "preprocess_textures": True,
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
-
         # physics-ish ranges used inside cloth_env_pybullet.py
         "friction_range": [1.5, 3.5],
         "mass": 0.5,
@@ -54,7 +48,6 @@ _DEFAULTS = {
         "useSelfCollision": 1,
         "useFaceContact": 1,
     },
-
     "table": {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
         "color_hi": [0.95, 0.90, 0.85, 1.0],
@@ -63,19 +56,16 @@ _DEFAULTS = {
         "spinning_friction_range": [0.0005, 0.003],
         "restitution_range": [0.0, 0.2],
     },
-
     "floor": {
         "color_lo": [0.25, 0.25, 0.25, 1.0],
         "color_hi": [0.85, 0.85, 0.85, 1.0],
     },
-
     "robot": {
         # used by cloth_env_pybullet.reset() when DR master is on
         "lin_damping_range": [0.0, 0.2],
         "ang_damping_range": [0.0, 0.2],
         "lateral_friction_range": [1.5, 3.5],
     },
-
     # world-level physics randomization
     "dynamics_randomization": True,
     "physics": {
@@ -87,10 +77,10 @@ _DEFAULTS = {
         "restitution_vel_thresh_range": [0.0, 0.5],
         "contact_breaking_threshold_range": [0.02, 0.08],
     },
-
     "gravity_randomization": True,
     "gravity_range": [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]],
 }
+
 
 def _deep_merge(dst: dict, src: dict):
     """Recursively merge src into dst (in-place) with nested dict support."""
@@ -101,12 +91,13 @@ def _deep_merge(dst: dict, src: dict):
             dst[k] = v
     return dst
 
+
 def make_bullet_randomization_kwargs(
     enable_dr: Optional[bool] = None,
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Build the Bullet DR config. 
+    Build the Bullet DR config.
     - enable_dr defaults to True, unless NO_DR=1.
     - Any keys in `overrides` are deep-merged into the defaults.
     """

@@ -1,15 +1,18 @@
-import pybullet as p
 import numpy as np
-import os
+import pybullet as p
+
 
 class PandaRobot:
     """
     Encapsulates the Franka Emika Panda robot logic, including loading,
     joint/link identification, control, and sensor feedback.
     """
+
     def __init__(self, base_position, base_orientation):
         self.urdf_path = "franka_panda/panda.urdf"
-        self.robot_id = p.loadURDF(self.urdf_path, base_position, base_orientation, useFixedBase=True)
+        self.robot_id = p.loadURDF(
+            self.urdf_path, base_position, base_orientation, useFixedBase=True
+        )
 
         self._find_links_and_joints()
         self._get_joint_limits()
@@ -29,19 +32,23 @@ class PandaRobot:
 
         for j in range(p.getNumJoints(self.robot_id)):
             info = p.getJointInfo(self.robot_id, j)
-            link_name = info[12].decode('UTF-8')
-            joint_name = info[1].decode('UTF-8')
+            link_name = info[12].decode("UTF-8")
+            joint_name = info[1].decode("UTF-8")
 
             if info[2] == p.JOINT_REVOLUTE:
                 self.arm_joint_indices.append(j)
-            elif info[2] == p.JOINT_PRISMATIC and 'finger' in joint_name:
+            elif info[2] == p.JOINT_PRISMATIC and "finger" in joint_name:
                 self.finger_joint_indices.append(j)
                 p.setCollisionFilterGroupMask(self.robot_id, j, 1, 0)
 
-            if link_name == 'panda_leftfinger': self.left_finger_link_index = j
-            elif link_name == 'panda_rightfinger': self.right_finger_link_index = j
-            elif link_name == 'panda_hand': self.hand_link_index = j
-            elif link_name == 'panda_grasptarget': self.grasp_target_link_index = j
+            if link_name == "panda_leftfinger":
+                self.left_finger_link_index = j
+            elif link_name == "panda_rightfinger":
+                self.right_finger_link_index = j
+            elif link_name == "panda_hand":
+                self.hand_link_index = j
+            elif link_name == "panda_grasptarget":
+                self.grasp_target_link_index = j
 
         # Use the grasp target as the primary end-effector for control
         if self.grasp_target_link_index != -1:
@@ -75,24 +82,36 @@ class PandaRobot:
         Sets up motor control for the robot's fingers and welds them shut.
         """
         self.finger_closed_pos = 0.0
-        self.finger_max_force = 200.0 # Default strong force
-        self.finger_kp = 1.0 # Default position gain
-        self.finger_max_vel = 2.0 # Default max velocity
+        self.finger_max_force = 200.0  # Default strong force
+        self.finger_kp = 1.0  # Default position gain
+        self.finger_max_vel = 2.0  # Default max velocity
 
     def weld_fingers_shut(self):
         """Creates fixed constraints to weld the fingers to the hand, ensuring a rigid grip."""
         if self.hand_link_index is not None:
             if self.left_finger_link_index is not None:
-                cid = p.createConstraint(self.robot_id, self.hand_link_index,
-                                   self.robot_id, self.left_finger_link_index,
-                                   jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
-                                   parentFramePosition=[0, 0, 0], childFramePosition=[0, 0, 0])
+                cid = p.createConstraint(
+                    self.robot_id,
+                    self.hand_link_index,
+                    self.robot_id,
+                    self.left_finger_link_index,
+                    jointType=p.JOINT_FIXED,
+                    jointAxis=[0, 0, 0],
+                    parentFramePosition=[0, 0, 0],
+                    childFramePosition=[0, 0, 0],
+                )
                 p.changeConstraint(cid, maxForce=self.finger_max_force)
             if self.right_finger_link_index is not None:
-                cid = p.createConstraint(self.robot_id, self.hand_link_index,
-                                   self.robot_id, self.right_finger_link_index,
-                                   jointType=p.JOINT_FIXED, jointAxis=[0, 0, 0],
-                                   parentFramePosition=[0, 0, 0], childFramePosition=[0, 0, 0])
+                cid = p.createConstraint(
+                    self.robot_id,
+                    self.hand_link_index,
+                    self.robot_id,
+                    self.right_finger_link_index,
+                    jointType=p.JOINT_FIXED,
+                    jointAxis=[0, 0, 0],
+                    parentFramePosition=[0, 0, 0],
+                    childFramePosition=[0, 0, 0],
+                )
                 p.changeConstraint(cid, maxForce=self.finger_max_force)
 
     def reset_to_neutral(self):
@@ -153,17 +172,24 @@ class PandaRobot:
         Applies target joint positions to the robot's arm controllers.
         """
         p.setJointMotorControlArray(
-            self.robot_id, self.arm_joint_indices[:7], p.POSITION_CONTROL,
-            targetPositions=joint_positions[:7], forces=self.joint_max_forces[:7]
+            self.robot_id,
+            self.arm_joint_indices[:7],
+            p.POSITION_CONTROL,
+            targetPositions=joint_positions[:7],
+            forces=self.joint_max_forces[:7],
         )
 
     def force_fingers_closed(self):
         """Applies strong force to ensure fingers remain closed."""
         for j in self.finger_joint_indices:
             p.setJointMotorControl2(
-                self.robot_id, j, p.POSITION_CONTROL,
-                targetPosition=self.finger_closed_pos, force=self.finger_max_force,
-                positionGain=self.finger_kp, maxVelocity=self.finger_max_vel
+                self.robot_id,
+                j,
+                p.POSITION_CONTROL,
+                targetPosition=self.finger_closed_pos,
+                force=self.finger_max_force,
+                positionGain=self.finger_kp,
+                maxVelocity=self.finger_max_vel,
             )
             # Safety check to snap back if drifted
             if abs(p.getJointState(self.robot_id, j)[0] - self.finger_closed_pos) > 1e-5:
@@ -176,21 +202,28 @@ class PandaRobot:
         """
         # Arm links
         for j in self.arm_joint_indices:
-            p.changeDynamics(self.robot_id, j,
-                             linearDamping=float(linear_damp),
-                             angularDamping=float(angular_damp),
-                             lateralFriction=float(lateral_friction))
+            p.changeDynamics(
+                self.robot_id,
+                j,
+                linearDamping=float(linear_damp),
+                angularDamping=float(angular_damp),
+                lateralFriction=float(lateral_friction),
+            )
         # Hand/EE (if present)
         for maybe in [self.hand_link_index, self.ee_link_index]:
             if maybe is not None and maybe >= 0:
-                p.changeDynamics(self.robot_id, int(maybe),
-                                 linearDamping=float(linear_damp),
-                                 angularDamping=float(angular_damp),
-                                 lateralFriction=float(lateral_friction))
+                p.changeDynamics(
+                    self.robot_id,
+                    int(maybe),
+                    linearDamping=float(linear_damp),
+                    angularDamping=float(angular_damp),
+                    lateralFriction=float(lateral_friction),
+                )
 
     def set_initial_joint_positions(self):
         initial_qpos = np.array(
-            [0.212422, 0.362907, -0.00733391, -1.9649, -0.0198034, 2.37451, -1.50499])
+            [0.212422, 0.362907, -0.00733391, -1.9649, -0.0198034, 2.37451, -1.50499]
+        )
         # Apply it
-        for i, j in enumerate(self.arm_joint_indices[:len(initial_qpos)]):
+        for i, j in enumerate(self.arm_joint_indices[: len(initial_qpos)]):
             p.resetJointState(self.robot_id, j, float(initial_qpos[i]), 0.0)

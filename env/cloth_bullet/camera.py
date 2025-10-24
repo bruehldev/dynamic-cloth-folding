@@ -1,37 +1,40 @@
+import os
+
+import cv2
 import numpy as np
 import pybullet as p
-import math
-import cv2
-import os
 
 
 class Camera:
     def __init__(self, image_size, randomization_kwargs):
-        self.image_size = image_size            # final policy size, e.g. (100, 100)
+        self.image_size = image_size  # final policy size, e.g. (100, 100)
         self.fov = 60  # Default field of view
         self.randomization_kwargs = randomization_kwargs
         self.albumentations_transform = None
 
         # NEW: high-res render size (W_render, H_render)
-        self.render_size = tuple(
-            self.randomization_kwargs.get("render_size", (320, 240))
-        )
+        self.render_size = tuple(self.randomization_kwargs.get("render_size", (320, 240)))
 
         self._episode_center = None
         self._episode_eye = None
         self._episode_fov = None
         if self.randomization_kwargs.get("albumentations_randomization", False):
             import albumentations as A
+
             self.albumentations_transform = A.Compose(
                 [
-                    A.RGBShift(r_shift_limit=15, g_shift_limit=15,
-                               b_shift_limit=15, p=0.5),
+                    A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
                     A.RandomBrightnessContrast(p=0.5),
                     A.Blur(blur_limit=7, always_apply=False, p=0.5),
-                    A.ColorJitter(brightness=0.2, contrast=0.2,
-                                  saturation=0.2, hue=0.2, always_apply=False, p=0.5),
-                    A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0,
-                                   always_apply=False, p=0.5),
+                    A.ColorJitter(
+                        brightness=0.2,
+                        contrast=0.2,
+                        saturation=0.2,
+                        hue=0.2,
+                        always_apply=False,
+                        p=0.5,
+                    ),
+                    A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0, always_apply=False, p=0.5),
                 ]
             )
 
@@ -60,9 +63,11 @@ class Camera:
         # Freeze eye jitter once per episode
         if self.randomization_kwargs.get("camera_position_randomization", False):
             jx, jy, jz = cfg.get("jitter_xyz", [0.0, 0.0, 0.0])
-            eye = np.array(eye) + [np.random.uniform(-jx, jx),
-                                   np.random.uniform(-jy, jy),
-                                   np.random.uniform(-jz, jz)]
+            eye = np.array(eye) + [
+                np.random.uniform(-jx, jx),
+                np.random.uniform(-jy, jy),
+                np.random.uniform(-jz, jz),
+            ]
         self._episode_eye = np.array(eye, dtype=float).tolist()
         self._episode_up = [0.0, 0.0, 1.0]
 
@@ -86,7 +91,11 @@ class Camera:
         center_w = np.array(self._episode_center, dtype=float)
         eye = np.array(self._episode_eye, dtype=float)
         up = getattr(self, "_episode_up", [0.0, 0.0, 1.0])
-        fov = getattr(self, "_episode_fov", self.randomization_kwargs.get("camera_config", {}).get("train_camera_fovy", 60))
+        fov = getattr(
+            self,
+            "_episode_fov",
+            self.randomization_kwargs.get("camera_config", {}).get("train_camera_fovy", 60),
+        )
 
         # Match projection to the render buffer to avoid stretching
         aspect = self.render_size[0] / self.render_size[1]
@@ -99,7 +108,7 @@ class Camera:
 
         # 1) Render BIG
         W_render, H_render = self.render_size
-        conn = p.getConnectionInfo().get('connectionMethod', p.DIRECT)
+        conn = p.getConnectionInfo().get("connectionMethod", p.DIRECT)
         renderer = p.ER_BULLET_HARDWARE_OPENGL if conn == p.GUI else p.ER_TINY_RENDERER
 
         # --- MuJoCo-like lighting ---
@@ -109,8 +118,14 @@ class Camera:
         shadow = int(self.randomization_kwargs.get("lights_randomization", False))
 
         _, _, rgba, _, _ = p.getCameraImage(
-            W_render, H_render, view_matrix, proj_matrix,
-            shadow=shadow, lightDirection=ldir, lightColor=lcol, renderer=renderer
+            W_render,
+            H_render,
+            view_matrix,
+            proj_matrix,
+            shadow=shadow,
+            lightDirection=ldir,
+            lightColor=lcol,
+            renderer=renderer,
         )
         img = np.reshape(rgba, (H_render, W_render, 4))[:, :, :3].astype("uint8")
 
@@ -122,14 +137,16 @@ class Camera:
             W_out, H_out = W_render, H_render
         x0 = (W_render - W_out) // 2
         y0 = (H_render - H_out) // 2
-        img = img[y0:y0 + H_out, x0:x0 + W_out, :]
+        img = img[y0 : y0 + H_out, x0 : x0 + W_out, :]
 
         # 3) Albumentations only if enabled (MuJoCo parity)
-        if self.randomization_kwargs.get("albumentations_randomization", False) and self.albumentations_transform is not None:
+        if (
+            self.randomization_kwargs.get("albumentations_randomization", False)
+            and self.albumentations_transform is not None
+        ):
             img = self.albumentations_transform(image=img)["image"]
 
         # 4) Grayscale (MuJoCo policy input is gray)
-        import cv2
         img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
         # 5) Normalize + flatten
@@ -144,10 +161,10 @@ class Camera:
         dist = float(np.linalg.norm(cam_vec) or 0.5)
         yaw = float(np.degrees(np.arctan2(cam_vec[1], cam_vec[0])))
         pitch = float(-np.degrees(np.arctan2(cam_vec[2], np.linalg.norm(cam_vec[:2]) + 1e-9)))
-        
+
         # Allow manual tweaks via environment variables
         yaw = float(os.getenv("CAM_YAW", yaw))
         pitch = float(os.getenv("CAM_PITCH", pitch))
         dist = float(os.getenv("CAM_DIST", dist))
-        
+
         p.resetDebugVisualizerCamera(dist, yaw, max(-89.0, min(89.0, pitch)), center_w.tolist())

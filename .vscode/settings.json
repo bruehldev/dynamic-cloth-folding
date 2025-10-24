@@ -1,4 +1,24 @@
 {
+  // ---- Python (VS Code editor behavior) ----
+  "[python]": {
     "editor.formatOnSave": true,
-    "editor.formatOnPaste": true
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit",
+      "source.organizeImports": "explicit"
+    }
+  },
+
+  // ---- Ruff (extension) ----
+  // Point Ruff at your project's venv Python (ARRAY! only first entry is used)
+  "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
+
+  // Use the ruff from your env (falls back to bundled if not found)
+  "ruff.importStrategy": "fromEnvironment",
+
+  // Optional: force native server; otherwise leave at the default "auto"
+  // "ruff.nativeServer": "on"
+  
+  // Don't set deprecated legacy settings:
+  // ✗ ruff.lint.run, ruff.lint.args, ruff.format.args  (remove if present)
 }
