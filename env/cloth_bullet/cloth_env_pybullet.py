@@ -2,7 +2,7 @@ import contextlib
 import os
 from collections import deque
 from multiprocessing import current_process
-from typing import Optional
+from typing import Any, Optional
 
 import albumentations as A
 import gym
@@ -64,7 +64,7 @@ class BulletClothEnv_:
         image_obs_noise_std=0,
         has_viewer=False,
         image_size=100,
-        logger: Optional["RunLogger"] = None,
+        logger: Optional[Any] = None,
         **_,
     ):
         if _IMPORT_ERR is not None:
