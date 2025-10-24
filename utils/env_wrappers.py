@@ -1,11 +1,13 @@
-import numpy as _np
 import gym as _gym
+import numpy as _np
+
 
 class SanitizeObsWrapper(_gym.Wrapper):
     """
     Replaces NaN/Inf in Dict observations & clips to sensible ranges.
     Applies in both reset() and step().
     """
+
     def __init__(self, env, clip_dict=None):
         super().__init__(env)
         self.clip_dict = clip_dict or {}
@@ -37,13 +39,14 @@ class SanitizeObsWrapper(_gym.Wrapper):
 
 class PostNormalizeSanitizer(_gym.Wrapper):
     """Catches NaN/Inf that might be introduced by NormalizedBoxEnv."""
+
     def _clean(self, obs):
         if isinstance(obs, dict):
-            return {k: _np.nan_to_num(_np.asarray(v, _np.float32),
-                                      nan=0.0, posinf=1e3, neginf=-1e3)
-                    for k, v in obs.items()}
-        return _np.nan_to_num(_np.asarray(obs, _np.float32),
-                              nan=0.0, posinf=1e3, neginf=-1e3)
+            return {
+                k: _np.nan_to_num(_np.asarray(v, _np.float32), nan=0.0, posinf=1e3, neginf=-1e3)
+                for k, v in obs.items()
+            }
+        return _np.nan_to_num(_np.asarray(obs, _np.float32), nan=0.0, posinf=1e3, neginf=-1e3)
 
     def reset(self, **kw):
         return self._clean(self.env.reset(**kw))
@@ -56,10 +59,10 @@ class PostNormalizeSanitizer(_gym.Wrapper):
 def wrap_env_with_sanitizer(env):
     # conservative clips for stability
     clip_cfg = {
-        'image': (0.0, 1.0),
-        'robot_observation': (-1e3, 1e3),
-        'observation': (-1e3, 1e3),
-        'achieved_goal': (-1e3, 1e3),
-        'desired_goal': (-1e3, 1e3),
+        "image": (0.0, 1.0),
+        "robot_observation": (-1e3, 1e3),
+        "observation": (-1e3, 1e3),
+        "achieved_goal": (-1e3, 1e3),
+        "desired_goal": (-1e3, 1e3),
     }
     return SanitizeObsWrapper(env, clip_dict=clip_cfg)
