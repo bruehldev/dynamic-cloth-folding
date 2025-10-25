@@ -75,9 +75,19 @@ def experiment(variant):
     # - Bullet: build from a single, centralized source (with variant overrides if provided)
     # - MuJoCo: keep variant['randomization_kwargs'] as-is and use maybe_randomize()
     if BACKEND == "bullet":
+        # Get the base randomization kwargs from the variant
+        rand_kwargs = variant.get("randomization_kwargs", {})
+
+        # Prepare overrides to ensure cloth size from args is used
+        overrides = {"cloth": {}}
+        if "cloth_size" in rand_kwargs:
+            overrides["cloth"]["scale"] = rand_kwargs["cloth_size"]
+        if "cloth_size_range" in rand_kwargs:
+            overrides["cloth"]["scale_range"] = rand_kwargs["cloth_size_range"]
+
         variant["randomization_kwargs"] = make_bullet_randomization_kwargs(
             enable_dr=None,  # respect NO_DR; default is DR ON unless NO_DR=1
-            overrides=variant.get("randomization_kwargs", None),
+            overrides=overrides,
         )
     else:
         # Ensure a dict exists for MuJoCo path (camera config, etc. live here)

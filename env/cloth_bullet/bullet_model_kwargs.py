@@ -37,6 +37,16 @@ _DEFAULTS = {
         "fovy_range": [55.0, 65.0],
         "jitter_xyz": [0.01, 0.01, 0.01],
         "target_lookat_pos": [0.49476399, 0.00668401, 0.13310541],
+        "types": {
+            "default": {
+                "eye": [0.236, -0.594, 0.600],
+                "up": [0.0, 0.0, 1.0],
+            },
+            "side": {"eye": [-0.4, -0.7, 0.65], "up": [0.0, 0.0, 1.0]},
+            "front": {"eye": [0.5, -1.0, 0.75], "up": [0.0, 0.0, 1.0]},
+            "up": {"eye": [0.5, -0.7, 1.1], "up": [0.0, 0.0, 1.0]},
+            "full": {"eye": [1.022, -0.897, 0.739], "up": [0.0, 0.0, 1.0]},
+        },
     },
     # lighting randomization
     "lights_randomization": True,
@@ -44,10 +54,12 @@ _DEFAULTS = {
         "direction": [0.5, -0.5, -1.0],  # deterministic fallback
         "color": [1.0, 1.0, 1.0],  # deterministic fallback
         "shadows": 1,  # deterministic fallback
+        "direction_range": [[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]],
+        "color_range": [[0.6, 0.6, 0.6], [1.0, 1.0, 1.0]],
     },
     # geometry sizing (global fallback used by cloth if cloth.scale_range is missing)
-    "cloth_size_range": [0.20, 0.33],  # used when DR is ON
-    "cloth_size": 0.26,  # deterministic fallback used when DR is OFF
+    "cloth_size_range": [0.20, 0.33],  # DEPRECATED: use cloth.scale_range
+    "cloth_size": 0.26,  # DEPRECATED: use cloth.scale
     "mujoco_size_lock": True,  # keep Bullet cloth visually consistent with MuJoCo cloth_size
     # per-object sections
     "cloth": {
@@ -69,6 +81,9 @@ _DEFAULTS = {
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
+        "scale_range": [0.20, 0.33],  # used when DR is ON
+        "scale": 0.26,  # deterministic fallback used when DR is OFF
+        "scale_clearance_threshold": 0.26,
         "friction_range": [1.5, 3.5],
         "friction": 2.5,  # deterministic fallback if DR is OFF
         "mass": 0.5,
@@ -174,11 +189,12 @@ def make_bullet_randomization_kwargs(
     assert "workspace_limits_max" in cfg["robot"]
     assert "base_pos" in cfg["robot"]
     assert "base_orn_euler" in cfg["robot"]
-    assert "scale_range" in cfg["cloth"] or "cloth_size_range" in cfg
-    assert "scale" in cfg["cloth"] or "cloth_size" in cfg
+    assert "scale_range" in cfg["cloth"]
+    assert "scale" in cfg["cloth"]
     assert "scale_clip_range" in cfg["cloth"]
     assert "base_clearance" in cfg["cloth"]
     assert "extra_clearance_slope" in cfg["cloth"]
+    assert "scale_clearance_threshold" in cfg["cloth"]
     assert "friction_range" in cfg["cloth"]
     assert "friction" in cfg["cloth"]
     assert "spring_k_range" in cfg["cloth"]
@@ -189,6 +205,14 @@ def make_bullet_randomization_kwargs(
     assert "collision_margin" in cfg["cloth"]
     assert "mesh_path" in cfg["cloth"]
     assert "target_lookat_pos" in cfg["camera_config"]
+    assert "types" in cfg["camera_config"]
+    assert "default" in cfg["camera_config"]["types"]
+    assert "side" in cfg["camera_config"]["types"]
+    assert "front" in cfg["camera_config"]["types"]
+    assert "up" in cfg["camera_config"]["types"]
+    assert "lights" in cfg
+    assert "direction_range" in cfg["lights"]
+    assert "color_range" in cfg["lights"]
     assert "lift_fold_arc" in cfg["robot"]
     assert "enabled" in cfg["robot"]["lift_fold_arc"]
     assert "xy_travel_dist" in cfg["robot"]["lift_fold_arc"]

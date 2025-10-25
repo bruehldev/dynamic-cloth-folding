@@ -8,111 +8,87 @@ import pybullet as p
 class Camera:
     def __init__(self, image_size, randomization_kwargs):
         self.image_size = image_size  # final policy size, e.g. (100, 100)
-        self.fov = 60  # Default field of view
         self.randomization_kwargs = randomization_kwargs
         self.albumentations_transform = None
         # Master DR switch (propagated from bullet_model_kwargs / NO_DR)
-        self.enable_dr = bool((self.randomization_kwargs or {}).get("enable_dr", True))
+        self.enable_dr = self.randomization_kwargs["enable_dr"]
         # Cache camera config block for convenience
-        self._cam_cfg = (self.randomization_kwargs or {}).get("camera_config", {})
+        self._cam_cfg = self.randomization_kwargs["camera_config"]
 
         # NEW: high-res render size (W_render, H_render)
-        self.render_size = tuple((self.randomization_kwargs or {}).get("render_size", (320, 240)))
+        self.render_size = tuple(self.randomization_kwargs["render_size"])
 
         self._episode_center = None
         self._episode_eye = None
         self._episode_fov = None
         # Only construct augmentation pipeline if DR + flag are ON
-        if self.enable_dr and (self.randomization_kwargs or {}).get(
-            "albumentations_randomization", False
-        ):
+        if self.enable_dr and self.randomization_kwargs["albumentations_randomization"]:
             import albumentations as A
 
+            cfg = self.randomization_kwargs["albumentations_config"]
             self.albumentations_transform = A.Compose(
                 [
-                    A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
-                    A.RandomBrightnessContrast(p=0.5),
-                    A.Blur(blur_limit=7, always_apply=False, p=0.5),
-                    A.ColorJitter(
-                        brightness=0.2,
-                        contrast=0.2,
-                        saturation=0.2,
-                        hue=0.2,
-                        always_apply=False,
-                        p=0.5,
-                    ),
-                    A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0, always_apply=False, p=0.5),
+                    A.RGBShift(**cfg["RGBShift"]),
+                    A.RandomBrightnessContrast(**cfg["RandomBrightnessContrast"]),
+                    A.Blur(**cfg["Blur"]),
+                    A.ColorJitter(**cfg["ColorJitter"]),
+                    A.GaussianBlur(**cfg["GaussianBlur"]),
                 ]
             )
 
     def begin_episode(self, center_w):
         cfg = self._cam_cfg
-        mujoco_fovy = cfg.get("train_camera_fovy", 60)  # fallback to 60 if not set
-        fmin, fmax = cfg.get("fovy_range", [mujoco_fovy, mujoco_fovy])
-        if self.enable_dr and (self.randomization_kwargs or {}).get(
-            "camera_position_randomization", False
-        ):
+        if self.enable_dr and self.randomization_kwargs["camera_position_randomization"]:
+            fmin, fmax = cfg["fovy_range"]
             self._episode_fov = np.random.uniform(fmin, fmax)
         else:
-            self._episode_fov = (fmin + fmax) / 2
+            self._episode_fov = cfg["train_camera_fovy"]
 
         # Freeze look-at for the whole episode
         center = np.array(center_w, dtype=float)
-        if self.enable_dr and (self.randomization_kwargs or {}).get(
-            "lookat_position_randomization", False
-        ):
-            r = float(self.randomization_kwargs.get("lookat_position_randomization_radius", 0.0))
+        if self.enable_dr and self.randomization_kwargs["lookat_position_randomization"]:
+            r = self.randomization_kwargs["lookat_position_randomization_radius"]
             center = center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
         self._episode_center = center
 
         # Pick camera type once per episode (support "all")
-        cam_type = cfg.get("type", "default")
+        cam_type = cfg["type"]
         if cam_type == "all":
-            # DR: random pick; NO_DR: pick a stable default
-            if self.enable_dr:
-                cam_type = np.random.choice(["default", "side", "front", "up"])
-            else:
-                cam_type = "default"
+            # DR: random pick; NO_DR: pick a stable default matching the original implementation
+            cam_type = np.random.choice(list(cfg["types"].keys())) if self.enable_dr else "default"
+        # print(f"Camera type for this episode: {cam_type}")
         eye, up = self._get_eye_from_type(center, cam_type)
 
         # Freeze eye jitter once per episode
-        if self.enable_dr and (self.randomization_kwargs or {}).get(
-            "camera_position_randomization", False
-        ):
-            jx, jy, jz = cfg.get("jitter_xyz", [0.0, 0.0, 0.0])
+        if self.enable_dr and self.randomization_kwargs["camera_position_randomization"]:
+            jx, jy, jz = cfg["jitter_xyz"]
             eye = np.array(eye) + [
                 np.random.uniform(-jx, jx),
                 np.random.uniform(-jy, jy),
                 np.random.uniform(-jz, jz),
             ]
         self._episode_eye = np.array(eye, dtype=float).tolist()
-        self._episode_up = [0.0, 0.0, 1.0]
+        self._episode_up = up
 
     def _get_eye_from_type(self, center_w, cam_type):
         """Returns eye position and up vector based on camera type."""
-        # MuJoCo canonical camera positions (from arena.xml)
-        if cam_type == "up":
-            eye = np.array([0.5, -0.7, 1.1])
-        elif cam_type == "front":
-            eye = np.array([0.5, -1.0, 0.75])
-        elif cam_type == "side":
-            eye = np.array([-0.4, -0.7, 0.65])
-        else:  # default
-            # Use MuJoCo's "eval_camera" or "agentview" as default if you wish, or keep as is
-            eye = np.array([-0.45, -1.0, 1.0])
-        up = [0.0, 0.0, 1.0]
-        return eye.tolist(), up
+        cam_spec = self._cam_cfg["types"][cam_type]
+        eye = cam_spec["eye"]
+        up = cam_spec["up"]
+
+        if self.enable_dr:
+            # When DR is ON, treat eye as an offset from the cloth center.
+            return (np.array(center_w) + np.array(eye)).tolist(), up
+        else:
+            # When DR is OFF, use the eye position as a fixed world coordinate for consistency
+            return eye, up
 
     def get_view_projection_matrices(self, _center_w_unused):
         # Use frozen episode parameters
         center_w = np.array(self._episode_center, dtype=float)
         eye = np.array(self._episode_eye, dtype=float)
-        up = getattr(self, "_episode_up", [0.0, 0.0, 1.0])
-        fov = getattr(
-            self,
-            "_episode_fov",
-            self.randomization_kwargs.get("camera_config", {}).get("train_camera_fovy", 60),
-        )
+        up = self._episode_up
+        fov = self._episode_fov
 
         # Match projection to the render buffer to avoid stretching
         aspect = self.render_size[0] / self.render_size[1]
@@ -129,17 +105,17 @@ class Camera:
         renderer = p.ER_BULLET_HARDWARE_OPENGL if conn == p.GUI else p.ER_TINY_RENDERER
 
         # --- MuJoCo-like lighting ---
-        lights = (self.randomization_kwargs or {}).get("lights", {})
-        if self.enable_dr and (self.randomization_kwargs or {}).get("lights_randomization", False):
+        lights_cfg = self.randomization_kwargs["lights"]
+        if self.enable_dr and self.randomization_kwargs["lights_randomization"]:
             # Randomized lights
-            ldir = np.random.uniform(-1, 1, size=3).tolist()
-            lcol = np.random.uniform(0.6, 1.0, size=3).tolist()
+            ldir = np.random.uniform(*lights_cfg["direction_range"]).tolist()
+            lcol = np.random.uniform(*lights_cfg["color_range"]).tolist()
             shadow = 1
         else:
             # Deterministic/stable lights
-            ldir = lights.get("direction", [0.5, -0.5, -1.0])
-            lcol = lights.get("color", [1.0, 1.0, 1.0])
-            shadow = int(lights.get("shadows", 1))
+            ldir = lights_cfg["direction"]
+            lcol = lights_cfg["color"]
+            shadow = int(lights_cfg["shadows"])
 
         _, _, rgba, _, _ = p.getCameraImage(
             W_render,
@@ -164,11 +140,7 @@ class Camera:
         img = img[y0 : y0 + H_out, x0 : x0 + W_out, :]
 
         # 3) Albumentations only if enabled (MuJoCo parity)
-        if (
-            self.enable_dr
-            and (self.randomization_kwargs or {}).get("albumentations_randomization", False)
-            and self.albumentations_transform is not None
-        ):
+        if self.enable_dr and self.randomization_kwargs["albumentations_randomization"]:
             img = self.albumentations_transform(image=img)["image"]
 
         # 4) Grayscale (MuJoCo policy input is gray)
@@ -193,3 +165,40 @@ class Camera:
         dist = float(os.getenv("CAM_DIST", dist))
 
         p.resetDebugVisualizerCamera(dist, yaw, max(-89.0, min(89.0, pitch)), center_w.tolist())
+
+    def print_gui_camera_as_type(self, name="custom", paste="auto", decimals=5):
+        """
+        Print a '"name": {"eye": [...], "up": [0,0,1]},' snippet based on the current GUI camera.
+
+        paste:
+        - "relative": store an OFFSET from the episode center (use this when DR is ON)
+        - "absolute": store an absolute world position (use when DR is OFF / fixed cam)
+        - "auto"    : picks relative if self.enable_dr else absolute
+        """
+        import numpy as np
+        import pybullet as p
+
+        # PyBullet: [w,h,view,proj,upVec,forwardVec,hor,vert,yaw,pitch,dist,target]
+        info = p.getDebugVisualizerCamera()
+        up_vec = np.array(info[4], dtype=np.float32)  # noqa: F841
+        fwd_vec = np.array(info[5], dtype=np.float32)  # points from CAMERA -> TARGET
+        dist = float(info[10])
+        target = np.array(info[11], dtype=np.float32)
+
+        # This relation is exact and avoids yaw/pitch sign gotchas:
+        eye = target - dist * fwd_vec
+
+        # Absolute vs relative (offset)
+        center = np.array(getattr(self, "_episode_center", target), dtype=np.float32)
+        abs_eye = np.round(eye, decimals).tolist()
+        rel_eye = np.round((eye - center), decimals).tolist()
+
+        if paste == "auto":
+            paste = "relative" if getattr(self, "enable_dr", False) else "absolute"
+
+        if paste == "relative":
+            print(f'"{name}": {{"eye": {rel_eye}, "up": [0.0, 0.0, 1.0]}},')
+        elif paste == "absolute":
+            print(f'"{name}": {{"eye": {abs_eye}, "up": [0.0, 0.0, 1.0]}},')
+        else:
+            print("// absolute:", abs_eye, "   relative:", rel_eye)

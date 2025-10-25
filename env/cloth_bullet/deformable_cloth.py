@@ -154,12 +154,14 @@ class DeformableCloth:
         verts = self.get_raw_vertex_positions()
         min_x, max_x = verts[:, 0].min(), verts[:, 0].max()
         min_y, max_y = verts[:, 1].min(), verts[:, 1].max()
+        center_xy = (verts[:, 0].mean(), verts[:, 1].mean())
 
         targets = {
             "top_left": (min_x, max_y),
             "top_right": (max_x, max_y),
             "bottom_left": (min_x, min_y),
             "bottom_right": (max_x, min_y),
+            "mid": center_xy,
         }
 
         def dist2(v, t):
@@ -176,6 +178,7 @@ class DeformableCloth:
             "1": f"v_{self.corner_vertex_ids['bottom_right']}",
             "2": f"v_{self.corner_vertex_ids['top_left']}",
             "3": f"v_{self.corner_vertex_ids['bottom_left']}",
+            "mid": f"v_{self.corner_vertex_ids['mid']}",
         }
 
     def compute_sites(self, n=9):

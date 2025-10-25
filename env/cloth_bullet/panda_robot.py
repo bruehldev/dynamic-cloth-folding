@@ -120,7 +120,6 @@ class PandaRobot:
         """
         for j in self.arm_joint_indices:
             p.resetJointState(self.robot_id, j, 0.0, 0.0)
-            p.changeDynamics(self.robot_id, j, linearDamping=0.1, angularDamping=0.1)
             p.setJointMotorControl2(self.robot_id, j, p.VELOCITY_CONTROL, force=0.0)
         for j in self.finger_joint_indices:
             p.resetJointState(self.robot_id, j, self.finger_closed_pos, 0.0)

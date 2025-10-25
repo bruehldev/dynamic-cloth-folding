@@ -168,11 +168,16 @@ class BulletClothEnv_:
         base_orn = p.getQuaternionFromEuler(robot_cfg["base_orn_euler"])
         self.robot = PandaRobot(base_position=base_pos, base_orientation=base_orn)
         # Robot dynamics DR (only if master switch is ON)
-        if self.enable_dr and self.kwargs and self.kwargs["dynamics_randomization"]:
+        if self.enable_dr and self.kwargs["dynamics_randomization"]:
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
             _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
             _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))
             # Prefer the PandaRobot helper if present; call positionally for max compatibility.
+            self.robot.randomize_dynamics(_lin, _ang, _frc)
+        elif not self.enable_dr:
+            _lin = float(robot_cfg["lin_damping"])
+            _ang = float(robot_cfg["ang_damping"])
+            _frc = float(robot_cfg["lateral_friction"])
             self.robot.randomize_dynamics(_lin, _ang, _frc)
 
         cloth_cfg = self.kwargs["cloth"]
@@ -189,13 +194,12 @@ class BulletClothEnv_:
         if self.enable_dr:
             # MuJoCo uses cloth_size, Bullet uses scale. To keep them visually
             # consistent, we use target_edge_length in DeformableCloth to auto-size.
-            # The range here should match MuJoCo's randomization_kwargs.cloth_size_range.
-            size_range = cloth_cfg.get("scale_range", self.kwargs["cloth_size_range"])
+            size_range = cloth_cfg["scale_range"]
             scale_guess = float(self.np_random.uniform(size_range[0], size_range[1]))
         else:
             # Use a fixed size if DR is off.
             # For consistency, this should match MuJoCo's env_kwargs.cloth_size.
-            scale_guess = float(cloth_cfg.get("scale", self.kwargs["cloth_size"]))
+            scale_guess = float(cloth_cfg["scale"])
 
         # Clamp to keep Bullet stable
         scale_clip_range = cloth_cfg["scale_clip_range"]
@@ -204,7 +208,8 @@ class BulletClothEnv_:
         # Spawn a bit higher for larger cloth to avoid initial interpenetration
         base_clearance = cloth_cfg["base_clearance"]
         extra_clearance_slope = cloth_cfg["extra_clearance_slope"]
-        extra_clearance = max(0.0, (scale_guess - 0.26)) * extra_clearance_slope  # gentle slope
+        clearance_thresh = cloth_cfg["scale_clearance_threshold"]
+        extra_clearance = max(0.0, (scale_guess - clearance_thresh)) * extra_clearance_slope
         cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
 
         if self.enable_dr:
@@ -247,11 +252,11 @@ class BulletClothEnv_:
         for _ in range(cloth_cfg["settle_steps"]):
             self.world.step()
 
-        # Set camera target to MuJoCo's lookatbody, not the table/cloth center
-        self._fixed_camera_target = np.array(
-            self.kwargs["camera_config"]["target_lookat_pos"], dtype=np.float32
-        )
-        self.camera.begin_episode(self._fixed_camera_target)
+        # Set camera target to the cloth's center, matching MuJoCo's lookatbody
+        center_v_name = self.cloth.corner_v_names["mid"]
+        self._camera_target = self.cloth.get_positions_W()[center_v_name]
+        self.camera.begin_episode(self._camera_target)
+        # self.camera.print_gui_camera_as_type()
         # (Keep rendering OFF until the end of reset)
 
         # Initialize the task
@@ -301,7 +306,7 @@ class BulletClothEnv_:
         )
 
         # Capture initial image (viewer can stay off; camera grabs directly)
-        img = self.camera.capture_image(self._fixed_camera_target)
+        img = self.camera.capture_image(self._camera_target)
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
@@ -315,7 +320,7 @@ class BulletClothEnv_:
             lo = np.array(cloth_cfg["color_lo"])
             hi = np.array(cloth_cfg["color_hi"])
             p.changeVisualShape(
-                self.cloth.cloth_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist()
+                self.cloth.cloth_id, -1, rgbaColor=(self.np_random.uniform(lo, hi)).tolist()
             )
 
         # Now show the fully initialized scene (single switch at the very end)
@@ -325,7 +330,7 @@ class BulletClothEnv_:
                     cameraDistance=1.2,
                     cameraYaw=30,
                     cameraPitch=-30,
-                    cameraTargetPosition=self._fixed_camera_target,
+                    cameraTargetPosition=self._camera_target,
                 )
             # Turn rendering back on…
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
@@ -396,7 +401,7 @@ class BulletClothEnv_:
             self.world.step()
 
             if i == image_obs_substep_idx:
-                self.frame_stack.append(self.camera.capture_image(self._fixed_camera_target))
+                self.frame_stack.append(self.camera.capture_image(self._camera_target))
 
         obs = self.get_obs()
         reward, done, info = self._get_reward_and_done(obs, raw_action)
@@ -568,7 +573,7 @@ class BulletClothEnv_:
 
     def capture_images(self, aux_output=None):
         """Captures an image, returning it 5 times for API compatibility."""
-        img = self.camera.capture_image(self._fixed_camera_target)
+        img = self.camera.capture_image(self._camera_target)
         img = (img.reshape(self.image_size + (-1,)) * 255).astype(np.uint8)
         return (img.copy(), img.copy(), img.copy(), img.copy(), img.copy())
 
