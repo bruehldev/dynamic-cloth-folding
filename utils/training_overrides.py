@@ -2,6 +2,26 @@
 import os
 
 
+def configure_headless_graphics():
+    """
+    Ensure headless MuJoCo (no GUI) uses EGL. Must be called BEFORE importing mujoco_py/ClothEnv.
+    """
+    if os.getenv("PHYSICS", "bullet").lower() == "mujoco" and os.getenv("WITH_GUI", "0") != "1":
+        os.environ.setdefault("MUJOCO_GL", "egl")
+        os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
+
+def use_inprocess_collector() -> bool:
+    """
+    Mirror the 'C' fallback: use in-process collector if GUI is on, or if we're in a
+    MuJoCo + SMOKE_TRAIN run (to avoid SubprocVecEnv offscreen quirks).
+    """
+    with_gui = os.getenv("WITH_GUI", "0") == "1"
+    physics_is_mj = os.getenv("PHYSICS", "bullet").lower() == "mujoco"
+    smoke = os.getenv("SMOKE_TRAIN", "0") == "1"
+    return with_gui or (physics_is_mj and smoke)
+
+
 def apply_training_env_overrides(variant: dict) -> dict:
     """
     Apply environment-variable based overrides to keep train.py lean.

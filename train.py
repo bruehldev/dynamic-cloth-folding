@@ -22,11 +22,20 @@ from utils.env_wrappers import PostNormalizeSanitizer, wrap_env_with_sanitizer
 from utils.eval_setup import make_eval_suite
 from utils.randomization import maybe_randomize
 from utils.trainer_patches import patch_get_diagnostics
-from utils.training_overrides import apply_training_env_overrides
+from utils.training_overrides import (
+    apply_training_env_overrides,
+    configure_headless_graphics,
+    use_inprocess_collector,
+)
 
 torch.backends.cudnn.benchmark = True
+
+# Read env first
 BACKEND = os.getenv("PHYSICS", "bullet").lower()
 
+configure_headless_graphics()
+
+# Now import the env class
 if BACKEND == "bullet":
     from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
     from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
@@ -93,6 +102,15 @@ def experiment(variant):
 
     env_keys, env_dims = general_utils.get_keys_and_dims(variant, randomized_eval_env)
 
+    # Fail-fast shape asserts
+    obs = randomized_eval_env.reset()
+    assert "image" in obs and "observation" in obs
+    assert obs["image"].size == (
+        variant["policy_kwargs"]["input_width"]
+        * variant["policy_kwargs"]["input_height"]
+        * variant["policy_kwargs"]["input_channels"]
+    )
+
     fc_width, fc_depth = (
         variant["value_function_kwargs"]["fc_layer_size"],
         variant["value_function_kwargs"]["fc_layer_depth"],
@@ -125,7 +143,11 @@ def experiment(variant):
         **variant["policy_kwargs"],
     )
 
-    eval_policy = sac_policies.MakeDeterministic(policy)
+    EVAL_DETERMINISTIC = os.getenv("EVAL_DETERMINISTIC", "1") == "1"
+    # stochastic eval – sample from the policy like in exploration (remove later)
+    eval_policy = sac_policies.MakeDeterministic(policy) if EVAL_DETERMINISTIC else policy
+
+    print(f"[eval] using {'deterministic' if EVAL_DETERMINISTIC else 'stochastic'} policy")
 
     # Build evaluation suite (success + real-corner tests)
     evaluation_suite = make_eval_suite(randomized_eval_env, eval_policy, env_keys, variant)
@@ -133,9 +155,8 @@ def experiment(variant):
     # --- Worker environment factory: Each subprocess gets its own RunLogger ---
     # BUT: If GUI is on, we want to see the exploration in the main process.
     # In that case, we use a KeyPathCollector with the eval_env.
-    if os.getenv("WITH_GUI", "0") == "1":
-        # Use the lenient collector that ignores unexpected arguments
-        # and inherits path_collector_kwargs from the variant.
+    if use_inprocess_collector():
+        # use non-vectorized collector in-process
         exploration_path_collector = LenientKeyPathCollector(
             randomized_eval_env,
             policy,
@@ -143,7 +164,6 @@ def experiment(variant):
             desired_goal_key=env_keys["desired_goal_key"],
             **variant["path_collector_kwargs"],
         )
-        # vec_env is not needed then
         vec_env = None
     else:
 
@@ -165,9 +185,19 @@ def experiment(variant):
                 base_env = wrappers.NormalizedBoxEnv(base_env)
                 base_env = PostNormalizeSanitizer(base_env)
 
-                return maybe_randomize(
+                env = maybe_randomize(
                     base_env, randomization_kwargs=variant["randomization_kwargs"]
                 )
+
+                # Smoke test to make failures explicit rather than silently returning 0 steps
+                try:
+                    _ = env.reset()
+                except Exception:
+                    import traceback
+
+                    traceback.print_exc()
+                    raise
+                return env
 
             return _fn
 
@@ -185,6 +215,7 @@ def experiment(variant):
             desired_goal_key=env_keys["desired_goal_key"],
             **variant["path_collector_kwargs"],
         )
+    print(f"Observation space keys: {eval_env.observation_space.spaces.keys()}")
 
     replay_buffer = future_obs_dict_replay_buffer.FutureObsDictRelabelingBuffer(
         ob_spaces=copy.deepcopy(eval_env.observation_space.spaces),

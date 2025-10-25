@@ -419,7 +419,6 @@ class BulletClothEnv_:
 
     def _get_reward_and_done(self, obs, raw_action):
         reward = self.task.compute_reward(obs["achieved_goal"], self.goal, {})
-        is_success = reward > self.task.fail_reward
 
         cloth_pos_I = self.get_cloth_position_I()
         corner_positions = np.array(
@@ -431,6 +430,20 @@ class BulletClothEnv_:
             ],
             dtype=np.float32,
         )
+
+        # Calculate all corner distances for the info dict
+        inv_map = {v: k for k, v in self.cloth.corner_v_names.items()}
+        distances = {"0": 0, "1": 0, "2": 0, "3": 0}
+        for c in self.task.constraints:
+            s1_v_idx = self.cloth.sites.get(c["origin"])
+            if s1_v_idx in inv_map:
+                s2_v_idx = self.cloth.sites.get(c["target"])
+                dist = np.linalg.norm(cloth_pos_I[s1_v_idx] - cloth_pos_I[s2_v_idx])
+                distances[inv_map[s1_v_idx]] = dist
+
+        # Use the correct distance for the done condition and success signal
+        dist_to_target = distances.get("1", float("inf"))
+        is_success = dist_to_target < self.success_distance
 
         info = {
             "reward": float(reward),
@@ -447,23 +460,11 @@ class BulletClothEnv_:
             "ee_W": self.robot.get_ee_position_W().copy(),
         }
 
-        # Calculate all corner distances for the info dict
-        inv_map = {v: k for k, v in self.cloth.corner_v_names.items()}
-        distances = {"0": 0, "1": 0, "2": 0, "3": 0}
-        for c in self.task.constraints:
-            s1_v_idx = self.cloth.sites.get(c["origin"])
-            if s1_v_idx in inv_map:
-                s2_v_idx = self.cloth.sites.get(c["target"])
-                dist = np.linalg.norm(cloth_pos_I[s1_v_idx] - cloth_pos_I[s2_v_idx])
-                distances[inv_map[s1_v_idx]] = dist
-
         for k in distances:
             info[f"corner_{k}"] = distances[k]
             info["corner_sum_error"] += distances[k]
         info["dsum"] = info["corner_sum_error"]
-
-        # Use the correct distance for the done condition
-        dist_to_target = distances["1"]
+        print(f"Debug: corner_sum_error: {info['corner_sum_error']}")
 
         if dist_to_target < self.success_distance:
             self.episode_ee_close_steps += 1
@@ -473,6 +474,9 @@ class BulletClothEnv_:
         done = self.episode_ee_close_steps >= self.max_close_steps
         # Overwrite is_success to match the original logic where it was tied to reward, not 'done'
         info["is_success"] = bool(is_success)
+        # printing info["corner_1"] in the first rollout for each backend.
+        if self.current_step == 1:
+            print(f"Debug: corner_1 distance: {info['corner_1']}")
         return reward, done, info
 
     def get_obs(self):

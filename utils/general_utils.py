@@ -6,7 +6,7 @@ import os
 
 import numpy as np
 import torch
-from git import Repo
+from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 from rlkit.torch import pytorch_util
 from robosuite import wrappers
 
@@ -55,9 +55,14 @@ def dump_commit_hashes(save_folder):
     commit_hashes = dict()
     for repo_name in repos:
         repo_path = os.path.abspath(repo_name)
-        repo = Repo.init(repo_path)
-        repo_value = dict(hash=str(repo.head.commit), message=repo.head.commit.message)
-        commit_hashes[repo_name] = repo_value
+        try:
+            repo = Repo(repo_path, search_parent_directories=True)
+            commit_hashes[repo_name] = {
+                "hash": str(repo.head.commit),
+                "message": repo.head.commit.message,
+            }
+        except (InvalidGitRepositoryError, NoSuchPathError):
+            commit_hashes[repo_name] = {"hash": None, "message": None}
 
     with open(f"{save_folder}/commit_hashes.json", "w") as outfile:
         json.dump(commit_hashes, outfile)
@@ -180,7 +185,7 @@ def argsparser():
     # Distance threshold for success for each corner
     parser.add_argument("--success-distance", type=float, default=0.05)
 
-    parser.add_argument("--frame-stack-size", type=int, default=1)
+    parser.add_argument("--frame-stack-size", type=int, default=4)
     parser.add_argument("--sparse-dense", type=int, default=1)
     parser.add_argument("--goal-noise", type=float, default=0.03)
     parser.add_argument("--success-reward", type=int, default=0)
