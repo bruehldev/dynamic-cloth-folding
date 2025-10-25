@@ -95,7 +95,8 @@ class BulletClothEnv_:
         self.fail_reward = fail_reward
         self.extra_reward = extra_reward
         self.image_size = (image_size, image_size)
-        self.randomization_kwargs = randomization_kwargs
+        self.kwargs = randomization_kwargs
+        self.enable_dr = self.kwargs["enable_dr"]
 
         self.has_viewer = has_viewer
         self.image_obs_noise_mean = image_obs_noise_mean
@@ -105,11 +106,12 @@ class BulletClothEnv_:
         self.action_space = gym.spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
         self.world = PyBulletWorld(self.has_viewer, self.timestep)
-        self.camera = Camera(self.image_size, self.randomization_kwargs)
+        self.camera = Camera(self.image_size, self.kwargs)
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
 
-        self.limits_min = [-0.35, -0.35, 0.0]
-        self.limits_max = [0.35, 0.35, 0.4]
+        robot_cfg = self.kwargs["robot"]
+        self.limits_min = robot_cfg["workspace_limits_min"]
+        self.limits_max = robot_cfg["workspace_limits_max"]
 
         self.reset()
 
@@ -157,66 +159,55 @@ class BulletClothEnv_:
             pass
         self.episode_ee_close_steps = 0
         self.world.reset()
-        enable_dr = (self.randomization_kwargs or {}).get("enable_dr", True)
-        if enable_dr:
-            self.world.apply_domain_randomization(self.randomization_kwargs)
+        if self.enable_dr:
+            self.world.apply_domain_randomization(self.kwargs)
 
         # Create robot and cloth
-        self.robot = PandaRobot(
-            base_position=[0, 0, 0], base_orientation=p.getQuaternionFromEuler([0, 0, 0])
-        )
+        robot_cfg = self.kwargs["robot"]
+        base_pos = robot_cfg["base_pos"]
+        base_orn = p.getQuaternionFromEuler(robot_cfg["base_orn_euler"])
+        self.robot = PandaRobot(base_position=base_pos, base_orientation=base_orn)
         # Robot dynamics DR (only if master switch is ON)
-        if enable_dr and (self.randomization_kwargs or {}).get("dynamics_randomization", False):
-            rob_cfg = (self.randomization_kwargs or {}).get("robot", {})
-            _lin = float(np.random.uniform(*rob_cfg.get("lin_damping_range", [0.0, 0.2])))
-            _ang = float(np.random.uniform(*rob_cfg.get("ang_damping_range", [0.0, 0.2])))
-            _frc = float(np.random.uniform(*rob_cfg.get("lateral_friction_range", [1.5, 3.5])))
+        if self.enable_dr and self.kwargs and self.kwargs["dynamics_randomization"]:
+            _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
+            _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
+            _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))
             # Prefer the PandaRobot helper if present; call positionally for max compatibility.
-            try:
-                if hasattr(self.robot, "randomize_dynamics"):
-                    self.robot.randomize_dynamics(_lin, _ang, _frc)
-                else:
-                    raise AttributeError("no helper")
-            except (TypeError, AttributeError):
-                # Fallback: apply dynamics directly per joint/link
-                for j in range(p.getNumJoints(self.robot.robot_id)):
-                    p.changeDynamics(
-                        self.robot.robot_id,
-                        j,
-                        linearDamping=_lin,
-                        angularDamping=_ang,
-                        lateralFriction=_frc,
-                    )
-        cloth_pos = [0.5, 0.0, self.world.get_table_top_z() + 0.05]
+            self.robot.randomize_dynamics(_lin, _ang, _frc)
+
+        cloth_cfg = self.kwargs["cloth"]
+        initial_cloth_pos_xy = cloth_cfg["initial_pos"]
+        cloth_pos = [
+            initial_cloth_pos_xy[0],
+            initial_cloth_pos_xy[1],
+            self.world.get_table_top_z(),
+        ]
 
         # ---- Cloth domain randomization (physics + size + optional color) ----
-        cloth_cfg = (self.randomization_kwargs or {}).get("cloth", {})
 
         # --- Cloth size: random if DR enabled, else deterministic ---
-        if enable_dr:
+        if self.enable_dr:
             # MuJoCo uses cloth_size, Bullet uses scale. To keep them visually
             # consistent, we use target_edge_length in DeformableCloth to auto-size.
             # The range here should match MuJoCo's randomization_kwargs.cloth_size_range.
-            size_range = cloth_cfg.get(
-                "scale_range", self.randomization_kwargs.get("cloth_size_range", [0.20, 0.33])
-            )
+            size_range = cloth_cfg.get("scale_range", self.kwargs["cloth_size_range"])
             scale_guess = float(self.np_random.uniform(size_range[0], size_range[1]))
         else:
             # Use a fixed size if DR is off.
             # For consistency, this should match MuJoCo's env_kwargs.cloth_size.
-            scale_guess = float(
-                cloth_cfg.get("scale", self.randomization_kwargs.get("cloth_size", 0.26))
-            )
+            scale_guess = float(cloth_cfg.get("scale", self.kwargs["cloth_size"]))
 
         # Clamp to keep Bullet stable
-        scale_guess = float(np.clip(scale_guess, 0.10, 0.38))
+        scale_clip_range = cloth_cfg["scale_clip_range"]
+        scale_guess = float(np.clip(scale_guess, scale_clip_range[0], scale_clip_range[1]))
 
         # Spawn a bit higher for larger cloth to avoid initial interpenetration
-        base_clearance = 0.05
-        extra_clearance = max(0.0, (scale_guess - 0.26)) * 0.35  # gentle slope
+        base_clearance = cloth_cfg["base_clearance"]
+        extra_clearance_slope = cloth_cfg["extra_clearance_slope"]
+        extra_clearance = max(0.0, (scale_guess - 0.26)) * extra_clearance_slope  # gentle slope
         cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
 
-        if enable_dr:
+        if self.enable_dr:
             friction = float(self.np_random.uniform(*cloth_cfg["friction_range"]))
             spring_k = float(self.np_random.uniform(*cloth_cfg["spring_k_range"]))
             spring_c = float(self.np_random.uniform(*cloth_cfg["spring_c_range"]))
@@ -243,7 +234,7 @@ class BulletClothEnv_:
         )
 
         # No target_edge_length yet (DeformableCloth ignores it in current code)
-        mesh_path = str(cloth_cfg.get("mesh_path", "cloth_z_up.obj"))
+        mesh_path = str(cloth_cfg["mesh_path"])
         self.cloth = DeformableCloth(base_position=cloth_pos, mesh_path=mesh_path, **cloth_kwargs)
 
         # Pass logger down so cloth can report texture DR
@@ -251,14 +242,15 @@ class BulletClothEnv_:
             self.cloth.logger = self.logger
 
         # Appearance (textures + tint) handled by DeformableCloth
-        self.cloth.apply_appearance(self.randomization_kwargs)
+        self.cloth.apply_appearance(self.kwargs)
         # Wait for cloth to settle
-        for _ in range(60):
+        for _ in range(cloth_cfg["settle_steps"]):
             self.world.step()
 
         # Set camera target to MuJoCo's lookatbody, not the table/cloth center
-        mujoco_lookatbody = np.array([0.49476399, 0.00668401, 0.13310541], dtype=np.float32)
-        self._fixed_camera_target = mujoco_lookatbody
+        self._fixed_camera_target = np.array(
+            self.kwargs["camera_config"]["target_lookat_pos"], dtype=np.float32
+        )
         self.camera.begin_episode(self._fixed_camera_target)
         # (Keep rendering OFF until the end of reset)
 
@@ -316,12 +308,12 @@ class BulletClothEnv_:
 
         # Randomize cloth color (skip if DeformableCloth already tinted)
         if (
-            enable_dr
-            and self.randomization_kwargs.get("materials_randomization", False)
+            self.enable_dr
+            and self.kwargs["materials_randomization"]
             and not getattr(self.cloth, "_tint_applied", False)
         ):
-            lo = np.array(cloth_cfg.get("color_lo", [0.3, 0.5, 1.0, 1.0]))
-            hi = np.array(cloth_cfg.get("color_hi", [1.0, 1.0, 1.0, 1.0]))
+            lo = np.array(cloth_cfg["color_lo"])
+            hi = np.array(cloth_cfg["color_hi"])
             p.changeVisualShape(
                 self.cloth.cloth_id, -1, rgbaColor=(np.random.uniform(lo, hi)).tolist()
             )
@@ -343,11 +335,11 @@ class BulletClothEnv_:
                 p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
                 p.configureDebugVisualizer(
                     p.COV_ENABLE_DEPTH_BUFFER_PREVIEW,
-                    int(self.randomization_kwargs.get("show_depth_preview", 0)),
+                    int(self.kwargs["show_depth_preview"]),
                 )
                 p.configureDebugVisualizer(
                     p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW,
-                    int(self.randomization_kwargs.get("show_seg_preview", 0)),
+                    int(self.kwargs["show_seg_preview"]),
                 )
         except Exception:
             pass
@@ -375,14 +367,21 @@ class BulletClothEnv_:
         )
 
         # --- Lift-then-fold arc motion ---
-        table_z = self.world.get_table_top_z()
-        # t increases as the gripper moves away from its starting XY position
-        t = np.clip(
-            np.linalg.norm(self.desired_pos_step_W[:2] - self.relative_origin[:2]) / 0.25, 0.0, 1.0
-        )
-        z_start = table_z + 0.03  # Initial height close to the table
-        z_end = table_z + 0.10  # Peak height of the arc
-        self.desired_pos_step_W[2] = (1 - t) * z_start + t * z_end
+        robot_cfg = self.kwargs["robot"]
+        arc_cfg = robot_cfg["lift_fold_arc"]
+        if arc_cfg["enabled"]:
+            table_z = self.world.get_table_top_z()
+            # t increases as the gripper moves away from its starting XY position
+            xy_travel_dist = arc_cfg["xy_travel_dist"]
+            t = np.clip(
+                np.linalg.norm(self.desired_pos_step_W[:2] - self.relative_origin[:2])
+                / xy_travel_dist,
+                0.0,
+                1.0,
+            )
+            z_start = table_z + arc_cfg["z_start_offset"]  # Initial height close to the table
+            z_end = table_z + arc_cfg["z_end_offset"]  # Peak height of the arc
+            self.desired_pos_step_W[2] = (1 - t) * z_start + t * z_end
         # --- End of arc motion logic ---
 
         for i in range(self.substeps):
@@ -488,9 +487,7 @@ class BulletClothEnv_:
 
         # --- Physics DR scalars (MuJoCo parity) ---
         physics_params = []
-        if self.randomization_kwargs.get("enable_dr", True) and self.randomization_kwargs.get(
-            "dynamics_randomization", False
-        ):
+        if self.enable_dr and self.kwargs["dynamics_randomization"]:
             # safe fallbacks if something wasn't randomized this episode
             g = float(getattr(self.world, "gravity", -9.81))
             tab_mu = float(getattr(self.world, "table_lateral_friction", 0.8))

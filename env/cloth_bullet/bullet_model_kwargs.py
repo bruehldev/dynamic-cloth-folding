@@ -14,6 +14,19 @@ _DEFAULTS = {
     # appearance DR (textures/tints)
     "materials_randomization": True,
     "albumentations_randomization": True,  # image augmentation
+    "albumentations_config": {
+        "RGBShift": {"r_shift_limit": 15, "g_shift_limit": 15, "b_shift_limit": 15, "p": 0.5},
+        "RandomBrightnessContrast": {"p": 0.5},
+        "Blur": {"blur_limit": 7, "p": 0.5},
+        "ColorJitter": {
+            "brightness": 0.2,
+            "contrast": 0.2,
+            "saturation": 0.2,
+            "hue": 0.2,
+            "p": 0.5,
+        },
+        "GaussianBlur": {"blur_limit": [3, 7], "p": 0.5},
+    },
     # camera & view randomization
     "camera_position_randomization": True,
     "lookat_position_randomization": True,
@@ -23,6 +36,7 @@ _DEFAULTS = {
         "train_camera_fovy": 60.0,
         "fovy_range": [55.0, 65.0],
         "jitter_xyz": [0.01, 0.01, 0.01],
+        "target_lookat_pos": [0.49476399, 0.00668401, 0.13310541],
     },
     # lighting randomization
     "lights_randomization": True,
@@ -58,6 +72,10 @@ _DEFAULTS = {
         "friction_range": [1.5, 3.5],
         "friction": 2.5,  # deterministic fallback if DR is OFF
         "mass": 0.5,
+        "base_clearance": 0.05,
+        "extra_clearance_slope": 0.35,
+        "scale_clip_range": [0.10, 0.38],
+        "initial_pos": [0.5, 0.0],
         "useNeoHookean": 0,
         "useBendingSprings": 1,
         "useMassSpring": 1,
@@ -70,6 +88,7 @@ _DEFAULTS = {
         "useFaceContact": 1,
         "collision_margin_range": [0.008, 0.015],
         "collision_margin": 0.01,
+        "settle_steps": 60,
     },
     "table": {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
@@ -86,8 +105,21 @@ _DEFAULTS = {
     "robot": {
         # used by cloth_env_pybullet.reset() when DR master is on
         "lin_damping_range": [0.0, 0.2],
+        "lin_damping": 0.1,
         "ang_damping_range": [0.0, 0.2],
+        "ang_damping": 0.1,
         "lateral_friction_range": [1.5, 3.5],
+        "lateral_friction": 2.5,
+        "workspace_limits_min": [-0.35, -0.35, 0.0],
+        "workspace_limits_max": [0.35, 0.35, 0.4],
+        "base_pos": [0, 0, 0],
+        "base_orn_euler": [0, 0, 0],
+        "lift_fold_arc": {
+            "enabled": True,
+            "xy_travel_dist": 0.25,
+            "z_start_offset": 0.03,
+            "z_end_offset": 0.10,
+        },
     },
     # world-level physics randomization
     "dynamics_randomization": True,
@@ -133,4 +165,34 @@ def make_bullet_randomization_kwargs(
         enable_dr = os.getenv("NO_DR", "0") == "0"
 
     cfg["enable_dr"] = bool(enable_dr)
+
+    # Assert that required keys exist to avoid silent failures
+    assert "robot" in cfg
+    assert "cloth" in cfg
+    assert "camera_config" in cfg
+    assert "workspace_limits_min" in cfg["robot"]
+    assert "workspace_limits_max" in cfg["robot"]
+    assert "base_pos" in cfg["robot"]
+    assert "base_orn_euler" in cfg["robot"]
+    assert "scale_range" in cfg["cloth"] or "cloth_size_range" in cfg
+    assert "scale" in cfg["cloth"] or "cloth_size" in cfg
+    assert "scale_clip_range" in cfg["cloth"]
+    assert "base_clearance" in cfg["cloth"]
+    assert "extra_clearance_slope" in cfg["cloth"]
+    assert "friction_range" in cfg["cloth"]
+    assert "friction" in cfg["cloth"]
+    assert "spring_k_range" in cfg["cloth"]
+    assert "spring_k" in cfg["cloth"]
+    assert "spring_c_range" in cfg["cloth"]
+    assert "spring_c" in cfg["cloth"]
+    assert "collision_margin_range" in cfg["cloth"]
+    assert "collision_margin" in cfg["cloth"]
+    assert "mesh_path" in cfg["cloth"]
+    assert "target_lookat_pos" in cfg["camera_config"]
+    assert "lift_fold_arc" in cfg["robot"]
+    assert "enabled" in cfg["robot"]["lift_fold_arc"]
+    assert "xy_travel_dist" in cfg["robot"]["lift_fold_arc"]
+    assert "z_start_offset" in cfg["robot"]["lift_fold_arc"]
+    assert "z_end_offset" in cfg["robot"]["lift_fold_arc"]
+
     return _deep_merge(cfg, overrides or {})
