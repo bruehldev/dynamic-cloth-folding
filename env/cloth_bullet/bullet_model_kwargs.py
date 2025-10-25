@@ -13,9 +13,27 @@ _DEFAULTS = {
     "show_seg_preview": 1,
     # appearance DR (textures/tints)
     "materials_randomization": True,
+    "albumentations_randomization": True,  # image augmentation
+    # camera & view randomization
+    "camera_position_randomization": True,
+    "lookat_position_randomization": True,
+    "lookat_position_randomization_radius": 0.01,
+    "camera_config": {
+        "type": "all",  # one of: default, side, front, up, all
+        "train_camera_fovy": 60.0,
+        "fovy_range": [55.0, 65.0],
+        "jitter_xyz": [0.01, 0.01, 0.01],
+    },
+    # lighting randomization
+    "lights_randomization": True,
+    "lights": {
+        "direction": [0.5, -0.5, -1.0],  # deterministic fallback
+        "color": [1.0, 1.0, 1.0],  # deterministic fallback
+        "shadows": 1,  # deterministic fallback
+    },
     # geometry sizing (global fallback used by cloth if cloth.scale_range is missing)
-    "cloth_size_range": [0.10, 0.20],  # used when DR is ON
-    "cloth_size": 0.30,  # deterministic fallback used when DR is OFF
+    "cloth_size_range": [0.20, 0.33],  # used when DR is ON
+    "cloth_size": 0.26,  # deterministic fallback used when DR is OFF
     "mujoco_size_lock": True,  # keep Bullet cloth visually consistent with MuJoCo cloth_size
     # per-object sections
     "cloth": {
@@ -38,15 +56,20 @@ _DEFAULTS = {
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         "friction_range": [1.5, 3.5],
+        "friction": 2.5,  # deterministic fallback if DR is OFF
         "mass": 0.5,
         "useNeoHookean": 0,
         "useBendingSprings": 1,
         "useMassSpring": 1,
         "spring_k_range": [30.0, 80.0],
         "spring_c_range": [0.05, 0.2],
+        "spring_k": 50.0,  # deterministic fallback if DR is OFF
+        "spring_c": 0.1,  # deterministic fallback if DR is OFF
         "damping_all_dirs": 1,
         "useSelfCollision": 1,
         "useFaceContact": 1,
+        "collision_margin_range": [0.008, 0.015],
+        "collision_margin": 0.01,
     },
     "table": {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
@@ -79,6 +102,8 @@ _DEFAULTS = {
     },
     "gravity_randomization": True,
     "gravity_range": [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]],
+    # deterministic fallback if DR is OFF
+    "gravity": [0.0, 0.0, -9.81],
 }
 
 

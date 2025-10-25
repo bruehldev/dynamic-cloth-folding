@@ -11,14 +11,21 @@ class Camera:
         self.fov = 60  # Default field of view
         self.randomization_kwargs = randomization_kwargs
         self.albumentations_transform = None
+        # Master DR switch (propagated from bullet_model_kwargs / NO_DR)
+        self.enable_dr = bool((self.randomization_kwargs or {}).get("enable_dr", True))
+        # Cache camera config block for convenience
+        self._cam_cfg = (self.randomization_kwargs or {}).get("camera_config", {})
 
         # NEW: high-res render size (W_render, H_render)
-        self.render_size = tuple(self.randomization_kwargs.get("render_size", (320, 240)))
+        self.render_size = tuple((self.randomization_kwargs or {}).get("render_size", (320, 240)))
 
         self._episode_center = None
         self._episode_eye = None
         self._episode_fov = None
-        if self.randomization_kwargs.get("albumentations_randomization", False):
+        # Only construct augmentation pipeline if DR + flag are ON
+        if self.enable_dr and (self.randomization_kwargs or {}).get(
+            "albumentations_randomization", False
+        ):
             import albumentations as A
 
             self.albumentations_transform = A.Compose(
@@ -39,17 +46,21 @@ class Camera:
             )
 
     def begin_episode(self, center_w):
-        cfg = self.randomization_kwargs.get("camera_config", {})
+        cfg = self._cam_cfg
         mujoco_fovy = cfg.get("train_camera_fovy", 60)  # fallback to 60 if not set
         fmin, fmax = cfg.get("fovy_range", [mujoco_fovy, mujoco_fovy])
-        if self.randomization_kwargs.get("camera_position_randomization", False):
+        if self.enable_dr and (self.randomization_kwargs or {}).get(
+            "camera_position_randomization", False
+        ):
             self._episode_fov = np.random.uniform(fmin, fmax)
         else:
             self._episode_fov = (fmin + fmax) / 2
 
         # Freeze look-at for the whole episode
         center = np.array(center_w, dtype=float)
-        if self.randomization_kwargs.get("lookat_position_randomization", False):
+        if self.enable_dr and (self.randomization_kwargs or {}).get(
+            "lookat_position_randomization", False
+        ):
             r = float(self.randomization_kwargs.get("lookat_position_randomization_radius", 0.0))
             center = center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
         self._episode_center = center
@@ -57,11 +68,17 @@ class Camera:
         # Pick camera type once per episode (support "all")
         cam_type = cfg.get("type", "default")
         if cam_type == "all":
-            cam_type = np.random.choice(["default", "side", "front", "up"])
+            # DR: random pick; NO_DR: pick a stable default
+            if self.enable_dr:
+                cam_type = np.random.choice(["default", "side", "front", "up"])
+            else:
+                cam_type = "default"
         eye, up = self._get_eye_from_type(center, cam_type)
 
         # Freeze eye jitter once per episode
-        if self.randomization_kwargs.get("camera_position_randomization", False):
+        if self.enable_dr and (self.randomization_kwargs or {}).get(
+            "camera_position_randomization", False
+        ):
             jx, jy, jz = cfg.get("jitter_xyz", [0.0, 0.0, 0.0])
             eye = np.array(eye) + [
                 np.random.uniform(-jx, jx),
@@ -112,10 +129,17 @@ class Camera:
         renderer = p.ER_BULLET_HARDWARE_OPENGL if conn == p.GUI else p.ER_TINY_RENDERER
 
         # --- MuJoCo-like lighting ---
-        lights = self.randomization_kwargs.get("lights", {})
-        ldir = lights.get("direction", np.random.uniform(-1, 1, size=3).tolist())
-        lcol = lights.get("color", np.random.uniform(0.6, 1.0, size=3).tolist())
-        shadow = int(self.randomization_kwargs.get("lights_randomization", False))
+        lights = (self.randomization_kwargs or {}).get("lights", {})
+        if self.enable_dr and (self.randomization_kwargs or {}).get("lights_randomization", False):
+            # Randomized lights
+            ldir = np.random.uniform(-1, 1, size=3).tolist()
+            lcol = np.random.uniform(0.6, 1.0, size=3).tolist()
+            shadow = 1
+        else:
+            # Deterministic/stable lights
+            ldir = lights.get("direction", [0.5, -0.5, -1.0])
+            lcol = lights.get("color", [1.0, 1.0, 1.0])
+            shadow = int(lights.get("shadows", 1))
 
         _, _, rgba, _, _ = p.getCameraImage(
             W_render,
@@ -141,7 +165,8 @@ class Camera:
 
         # 3) Albumentations only if enabled (MuJoCo parity)
         if (
-            self.randomization_kwargs.get("albumentations_randomization", False)
+            self.enable_dr
+            and (self.randomization_kwargs or {}).get("albumentations_randomization", False)
             and self.albumentations_transform is not None
         ):
             img = self.albumentations_transform(image=img)["image"]

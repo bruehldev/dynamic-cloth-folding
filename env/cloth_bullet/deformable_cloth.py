@@ -43,6 +43,16 @@ class DeformableCloth:
         mass=1.0,
         target_edge_length=None,
         mesh_path="cloth_z_up.obj",
+        useNeoHookean=0,
+        useBendingSprings=1,
+        useMassSpring=1,
+        springElasticStiffness=40.0,
+        springDampingStiffness=0.1,
+        springDampingAllDirections=1,
+        useSelfCollision=1,
+        frictionCoeff=0.8,
+        useFaceContact=1,
+        collisionMargin=0.01,
         **kwargs,
     ):
         """
@@ -59,16 +69,16 @@ class DeformableCloth:
                 basePosition=base_position,
                 scale=scale_val,
                 mass=mass,
-                useNeoHookean=kwargs.get("useNeoHookean", 0),
-                useBendingSprings=kwargs.get("useBendingSprings", 1),
-                useMassSpring=kwargs.get("useMassSpring", 1),
-                springElasticStiffness=kwargs.get("springElasticStiffness", 40.0),
-                springDampingStiffness=kwargs.get("springDampingStiffness", 0.1),
-                springDampingAllDirections=kwargs.get("springDampingAllDirections", 1),
-                useSelfCollision=kwargs.get("useSelfCollision", 1),
-                frictionCoeff=kwargs.get("frictionCoeff", 0.8),
-                useFaceContact=kwargs.get("useFaceContact", 1),
-                collisionMargin=kwargs.get("collisionMargin", 0.01),
+                useNeoHookean=useNeoHookean,
+                useBendingSprings=useBendingSprings,
+                useMassSpring=useMassSpring,
+                springElasticStiffness=springElasticStiffness,
+                springDampingStiffness=springDampingStiffness,
+                springDampingAllDirections=springDampingAllDirections,
+                useSelfCollision=useSelfCollision,
+                frictionCoeff=frictionCoeff,
+                useFaceContact=useFaceContact,
+                collisionMargin=collisionMargin,
             )
             # Do NOT re-enable here; the env will enable at the very end of reset.
             return body_id
@@ -108,9 +118,9 @@ class DeformableCloth:
         # cache episode parameters for DR/obs parity with MuJoCo
         self.scale = used_scale
         self.mass = float(mass)
-        self.springElasticStiffness = float(kwargs.get("springElasticStiffness", 40))
-        self.springDampingStiffness = float(kwargs.get("springDampingStiffness", 0.1))
-        self.frictionCoeff = float(kwargs.get("frictionCoeff", 0.5))
+        self.springElasticStiffness = float(springElasticStiffness)
+        self.springDampingStiffness = float(springDampingStiffness)
+        self.frictionCoeff = float(frictionCoeff)
         # Not exposed by PyBullet for soft bodies; keep for reporting parity only
         self.thickness = float(kwargs.get("thickness", 0.002))
 

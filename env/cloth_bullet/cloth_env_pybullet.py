@@ -4,7 +4,6 @@ from collections import deque
 from multiprocessing import current_process
 from typing import Any, Optional
 
-import albumentations as A
 import gym
 import numpy as np
 import psutil
@@ -98,17 +97,6 @@ class BulletClothEnv_:
         self.image_size = (image_size, image_size)
         self.randomization_kwargs = randomization_kwargs
 
-        # Reuse MuJoCo’s augmentation policy
-        self.albumentations_transform = A.Compose(
-            [
-                A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
-                A.RandomBrightnessContrast(p=0.5),
-                A.Blur(blur_limit=7, p=0.5),
-                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, p=0.5),
-                A.GaussianBlur(blur_limit=(3, 7), p=0.5),
-            ]
-        )
-
         self.has_viewer = has_viewer
         self.image_obs_noise_mean = image_obs_noise_mean
         self.image_obs_noise_std = image_obs_noise_std
@@ -118,7 +106,6 @@ class BulletClothEnv_:
 
         self.world = PyBulletWorld(self.has_viewer, self.timestep)
         self.camera = Camera(self.image_size, self.randomization_kwargs)
-        self.camera.albumentations_transform = self.albumentations_transform
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
 
         self.limits_min = [-0.35, -0.35, 0.0]
@@ -207,20 +194,18 @@ class BulletClothEnv_:
 
         # --- Cloth size: random if DR enabled, else deterministic ---
         if enable_dr:
-            # Priority: cloth.scale_range -> global cloth_size_range -> fallback
-            sr = cloth_cfg.get("scale_range", None)
-            if sr is None:
-                sr = (self.randomization_kwargs or {}).get("cloth_size_range", None)
-            if sr is not None:
-                lo, hi = float(sr[0]), float(sr[1])
-                scale_guess = float(np.random.uniform(lo, hi))
-            else:
-                scale_guess = float(np.random.uniform(0.20, 0.33))
+            # MuJoCo uses cloth_size, Bullet uses scale. To keep them visually
+            # consistent, we use target_edge_length in DeformableCloth to auto-size.
+            # The range here should match MuJoCo's randomization_kwargs.cloth_size_range.
+            size_range = cloth_cfg.get(
+                "scale_range", self.randomization_kwargs.get("cloth_size_range", [0.20, 0.33])
+            )
+            scale_guess = float(self.np_random.uniform(size_range[0], size_range[1]))
         else:
-            # Deterministic: prefer explicit cloth.scale, else global cloth_size,
-            # else a stable default
+            # Use a fixed size if DR is off.
+            # For consistency, this should match MuJoCo's env_kwargs.cloth_size.
             scale_guess = float(
-                cloth_cfg.get("scale", (self.randomization_kwargs or {}).get("cloth_size", 0.26))
+                cloth_cfg.get("scale", self.randomization_kwargs.get("cloth_size", 0.26))
             )
 
         # Clamp to keep Bullet stable
@@ -230,24 +215,33 @@ class BulletClothEnv_:
         base_clearance = 0.05
         extra_clearance = max(0.0, (scale_guess - 0.26)) * 0.35  # gentle slope
         cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
-        fr_range = cloth_cfg.get("friction_range", [1.5, 3.5])
+
+        if enable_dr:
+            friction = float(self.np_random.uniform(*cloth_cfg["friction_range"]))
+            spring_k = float(self.np_random.uniform(*cloth_cfg["spring_k_range"]))
+            spring_c = float(self.np_random.uniform(*cloth_cfg["spring_c_range"]))
+            collision_margin = float(self.np_random.uniform(*cloth_cfg["collision_margin_range"]))
+        else:
+            friction = float(cloth_cfg["friction"])
+            spring_k = float(cloth_cfg["spring_k"])
+            spring_c = float(cloth_cfg["spring_c"])
+            collision_margin = float(cloth_cfg["collision_margin"])
+
         cloth_kwargs = dict(
             scale=scale_guess,
-            mass=float(cloth_cfg.get("mass", 0.5)),
-            useNeoHookean=int(cloth_cfg.get("useNeoHookean", 0)),
-            useBendingSprings=int(cloth_cfg.get("useBendingSprings", 1)),
-            useMassSpring=int(cloth_cfg.get("useMassSpring", 1)),
-            springElasticStiffness=float(
-                np.random.uniform(*cloth_cfg.get("spring_k_range", [30.0, 80.0]))
-            ),
-            springDampingStiffness=float(
-                np.random.uniform(*cloth_cfg.get("spring_c_range", [0.05, 0.2]))
-            ),
-            springDampingAllDirections=int(cloth_cfg.get("damping_all_dirs", 1)),
-            useSelfCollision=int(cloth_cfg.get("useSelfCollision", 1)),
-            frictionCoeff=float(np.random.uniform(*fr_range)),
-            useFaceContact=int(cloth_cfg.get("useFaceContact", 1)),
+            mass=float(cloth_cfg["mass"]),
+            useNeoHookean=int(cloth_cfg["useNeoHookean"]),
+            useBendingSprings=int(cloth_cfg["useBendingSprings"]),
+            useMassSpring=int(cloth_cfg["useMassSpring"]),
+            springElasticStiffness=spring_k,
+            springDampingStiffness=spring_c,
+            springDampingAllDirections=int(cloth_cfg["damping_all_dirs"]),
+            useSelfCollision=int(cloth_cfg["useSelfCollision"]),
+            frictionCoeff=friction,
+            useFaceContact=int(cloth_cfg["useFaceContact"]),
+            collisionMargin=collision_margin,
         )
+
         # No target_edge_length yet (DeformableCloth ignores it in current code)
         mesh_path = str(cloth_cfg.get("mesh_path", "cloth_z_up.obj"))
         self.cloth = DeformableCloth(base_position=cloth_pos, mesh_path=mesh_path, **cloth_kwargs)
@@ -464,7 +458,7 @@ class BulletClothEnv_:
             info[f"corner_{k}"] = distances[k]
             info["corner_sum_error"] += distances[k]
         info["dsum"] = info["corner_sum_error"]
-        print(f"Debug: corner_sum_error: {info['corner_sum_error']}")
+        # print(f"Debug: corner_sum_error: {info['corner_sum_error']}")
 
         if dist_to_target < self.success_distance:
             self.episode_ee_close_steps += 1
@@ -475,8 +469,8 @@ class BulletClothEnv_:
         # Overwrite is_success to match the original logic where it was tied to reward, not 'done'
         info["is_success"] = bool(is_success)
         # printing info["corner_1"] in the first rollout for each backend.
-        if self.current_step == 1:
-            print(f"Debug: corner_1 distance: {info['corner_1']}")
+        # if self.current_step == 1:
+        # print(f"Debug: corner_1 distance: {info['corner_1']}")
         return reward, done, info
 
     def get_obs(self):
@@ -494,7 +488,9 @@ class BulletClothEnv_:
 
         # --- Physics DR scalars (MuJoCo parity) ---
         physics_params = []
-        if self.randomization_kwargs.get("dynamics_randomization", False):
+        if self.randomization_kwargs.get("enable_dr", True) and self.randomization_kwargs.get(
+            "dynamics_randomization", False
+        ):
             # safe fallbacks if something wasn't randomized this episode
             g = float(getattr(self.world, "gravity", -9.81))
             tab_mu = float(getattr(self.world, "table_lateral_friction", 0.8))
