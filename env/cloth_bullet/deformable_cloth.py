@@ -39,66 +39,75 @@ class DeformableCloth:
     def __init__(
         self,
         base_position,
-        scale=0.15,
-        mass=1.0,
+        cloth_cfg,
+        enable_dr,
         target_edge_length=None,
-        mesh_path="cloth_z_up.obj",
-        useNeoHookean=0,
-        useBendingSprings=1,
-        useMassSpring=1,
-        springElasticStiffness=40.0,
-        springDampingStiffness=0.1,
-        springDampingAllDirections=1,
-        useSelfCollision=1,
-        frictionCoeff=0.8,
-        useFaceContact=1,
-        collisionMargin=0.01,
-        **kwargs,
     ):
         """
         If target_edge_length is given (meters), the cloth is scaled so that
         its XY edge length matches target_edge_length (MuJoCo's cloth_size).
         """
+        self.cloth_cfg = cloth_cfg
+        self.enable_dr = enable_dr
+
+        # Determine physics properties based on DR mode
+        if self.enable_dr:
+            friction = float(np.random.uniform(*self.cloth_cfg["friction_range"]))
+            spring_k = float(np.random.uniform(*self.cloth_cfg["spring_k_range"]))
+            spring_c = float(np.random.uniform(*self.cloth_cfg["spring_c_range"]))
+            collision_margin = float(np.random.uniform(*self.cloth_cfg["collision_margin_range"]))
+        else:
+            friction = float(self.cloth_cfg["friction"])
+            spring_k = float(self.cloth_cfg["spring_k"])
+            spring_c = float(self.cloth_cfg["spring_c"])
+            collision_margin = float(self.cloth_cfg["collision_margin"])
 
         def _load(scale_val):
             # Hard render guard: ensure GUI can't draw while spawning the soft body
             with contextlib.suppress(Exception):
                 p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             body_id = p.loadSoftBody(
-                mesh_path,
+                self.cloth_cfg["mesh_path"],
                 basePosition=base_position,
                 scale=scale_val,
-                mass=mass,
-                useNeoHookean=useNeoHookean,
-                useBendingSprings=useBendingSprings,
-                useMassSpring=useMassSpring,
-                springElasticStiffness=springElasticStiffness,
-                springDampingStiffness=springDampingStiffness,
-                springDampingAllDirections=springDampingAllDirections,
-                useSelfCollision=useSelfCollision,
-                frictionCoeff=frictionCoeff,
-                useFaceContact=useFaceContact,
-                collisionMargin=collisionMargin,
+                mass=self.cloth_cfg["mass"],
+                useNeoHookean=self.cloth_cfg["useNeoHookean"],
+                useBendingSprings=self.cloth_cfg["useBendingSprings"],
+                useMassSpring=self.cloth_cfg["useMassSpring"],
+                springElasticStiffness=spring_k,
+                springDampingStiffness=spring_c,
+                springDampingAllDirections=self.cloth_cfg["damping_all_dirs"],
+                useSelfCollision=self.cloth_cfg["useSelfCollision"],
+                frictionCoeff=friction,
+                useFaceContact=self.cloth_cfg["useFaceContact"],
+                collisionMargin=collision_margin,
             )
             # Do NOT re-enable here; the env will enable at the very end of reset.
             return body_id
 
         # If no target size is requested, load once with the given scale.
+        if self.enable_dr:
+            scale = float(np.random.uniform(*self.cloth_cfg["scale_range"]))
+        else:
+            scale = float(self.cloth_cfg["scale"])
+
+        # Clamp to keep Bullet stable
+        scale_clip_range = self.cloth_cfg["scale_clip_range"]
+        scale = float(np.clip(scale, scale_clip_range[0], scale_clip_range[1]))
+
         if target_edge_length is None:
             self.cloth_id = _load(scale)
             used_scale = float(scale)
         else:
             # Stage 1: load at a provisional scale to measure XY span
-            _temp_id = _load(scale if scale is not None else 1.0)
+            _temp_id = _load(scale)
             try:
                 aabb_min, aabb_max = p.getAABB(_temp_id)
                 span_x = aabb_max[0] - aabb_min[0]
                 span_y = aabb_max[1] - aabb_min[1]
                 current_edge = max(span_x, span_y)
                 current_edge = current_edge if current_edge > 1e-6 else 1e-6
-                desired_scale = (float(target_edge_length) / current_edge) * (
-                    scale if scale is not None else 1.0
-                )
+                desired_scale = (float(target_edge_length) / current_edge) * scale
             finally:
                 with contextlib.suppress(Exception):
                     p.removeBody(_temp_id)
@@ -112,17 +121,17 @@ class DeformableCloth:
         )
 
         # keep original mesh path for MTL parsing / logging
-        self.mesh_path = mesh_path
-        self.mesh_dir = os.path.dirname(mesh_path) if isinstance(mesh_path, str) else None
+        self.mesh_path = self.cloth_cfg["mesh_path"]
+        self.mesh_dir = os.path.dirname(self.mesh_path) if isinstance(self.mesh_path, str) else None
 
         # cache episode parameters for DR/obs parity with MuJoCo
         self.scale = used_scale
-        self.mass = float(mass)
-        self.springElasticStiffness = float(springElasticStiffness)
-        self.springDampingStiffness = float(springDampingStiffness)
-        self.frictionCoeff = float(frictionCoeff)
+        self.mass = float(self.cloth_cfg["mass"])
+        self.springElasticStiffness = float(spring_k)
+        self.springDampingStiffness = float(spring_c)
+        self.frictionCoeff = float(friction)
         # Not exposed by PyBullet for soft bodies; keep for reporting parity only
-        self.thickness = float(kwargs.get("thickness", 0.002))
+        self.thickness = float(self.cloth_cfg.get("thickness", 0.002))
 
         self._prev_verts_W = self.get_raw_vertex_positions()
         self.find_corners()
@@ -260,21 +269,15 @@ class DeformableCloth:
         enable_dr = bool(rk.get("enable_dr", True))
         cloth_cfg = dict(rk.get("cloth", {}))
 
-        # Defaults; allow overrides via cloth.texture_dir / cloth.fallback_texture
-        template_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "mujoco_templates", "textures")
-        )
-        fixed_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__), "..", "..", "assets", "cloth", "cloth_z_up", "cube.png"
-            )
-        )
-        template_dir = cloth_cfg.get("texture_dir", template_dir)
+        # paths from config
+        template_dir = cloth_cfg["texture_dir"]
+        fixed_path = cloth_cfg["fallback_texture"]
+
         # If no explicit fallback, try .mtl's map_Kd next to the mesh
-        fixed_path = cloth_cfg.get("fallback_texture", (self._mtl_map_kd() or fixed_path))
+        fixed_path = self._mtl_map_kd() or fixed_path
 
         tex_path = None
-        if enable_dr:
+        if enable_dr and cloth_cfg.get("materials_randomization", True):
             tex_path = self._pick_random_texture(template_dir)
 
         if not tex_path:
@@ -361,8 +364,8 @@ class DeformableCloth:
         self._tint_applied = False
         try:
             if enable_dr and rk.get("materials_randomization", False):
-                lo = np.array(cloth_cfg.get("color_lo", [0.8, 0.8, 0.8, 1.0]))
-                hi = np.array(cloth_cfg.get("color_hi", [1.0, 1.0, 1.0, 1.0]))
+                lo = np.array(cloth_cfg["color_lo"])
+                hi = np.array(cloth_cfg["color_hi"])
                 rgba = (np.random.uniform(lo, hi)).tolist()
                 self.set_color(rgba)
                 self._tint_applied = True

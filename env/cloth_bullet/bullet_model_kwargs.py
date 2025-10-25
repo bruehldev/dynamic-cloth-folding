@@ -151,6 +151,27 @@ _DEFAULTS = {
     "gravity_range": [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]],
     # deterministic fallback if DR is OFF
     "gravity": [0.0, 0.0, -9.81],
+    # --- Environment settings ---
+    "task_name": "sideways",
+    "image_size": 100,
+    "frame_stack_size": 4,
+    "control_frequency": 10.0,
+    "timestep": 0.01,
+    "output_max": 0.03,
+    "robot_observation": "ctrl",
+    "max_close_steps": 10,
+    "image_obs_noise_mean": 0.5,
+    "image_obs_noise_std": 0.5,
+    # --- Task settings ---
+    "folding_task": {
+        "sparse_dense": True,
+        "success_distance": 0.05,
+        "goal_noise_range": [0.0, 0.03],
+        "goal_noise": 0.0,
+        "success_reward": 50.0,
+        "fail_reward": -1.0,
+        "extra_reward": 1.0,
+    },
 }
 
 
@@ -185,6 +206,7 @@ def make_bullet_randomization_kwargs(
     assert "robot" in cfg
     assert "cloth" in cfg
     assert "camera_config" in cfg
+    assert "folding_task" in cfg
     assert "workspace_limits_min" in cfg["robot"]
     assert "workspace_limits_max" in cfg["robot"]
     assert "base_pos" in cfg["robot"]
@@ -197,6 +219,14 @@ def make_bullet_randomization_kwargs(
     assert "scale_clearance_threshold" in cfg["cloth"]
     assert "friction_range" in cfg["cloth"]
     assert "friction" in cfg["cloth"]
+    assert "mass" in cfg["cloth"]
+    assert "useNeoHookean" in cfg["cloth"]
+    assert "useBendingSprings" in cfg["cloth"]
+    assert "useMassSpring" in cfg["cloth"]
+    assert "damping_all_dirs" in cfg["cloth"]
+    assert "useSelfCollision" in cfg["cloth"]
+    assert "useFaceContact" in cfg["cloth"]
+    assert "settle_steps" in cfg["cloth"]
     assert "spring_k_range" in cfg["cloth"]
     assert "spring_k" in cfg["cloth"]
     assert "spring_c_range" in cfg["cloth"]
@@ -218,5 +248,17 @@ def make_bullet_randomization_kwargs(
     assert "xy_travel_dist" in cfg["robot"]["lift_fold_arc"]
     assert "z_start_offset" in cfg["robot"]["lift_fold_arc"]
     assert "z_end_offset" in cfg["robot"]["lift_fold_arc"]
+    assert "sparse_dense" in cfg["folding_task"]
+    assert "success_distance" in cfg["folding_task"]
+    assert "goal_noise_range" in cfg["folding_task"]
+    assert "goal_noise" in cfg["folding_task"]
+    assert "success_reward" in cfg["folding_task"]
+    assert "fail_reward" in cfg["folding_task"]
+    assert "extra_reward" in cfg["folding_task"]
+    assert "RGBShift" in cfg["albumentations_config"]
+    assert "RandomBrightnessContrast" in cfg["albumentations_config"]
+    assert "Blur" in cfg["albumentations_config"]
+    assert "ColorJitter" in cfg["albumentations_config"]
+    assert "GaussianBlur" in cfg["albumentations_config"]
 
     return _deep_merge(cfg, overrides or {})

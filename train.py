@@ -93,6 +93,11 @@ def experiment(variant):
         # Ensure a dict exists for MuJoCo path (camera config, etc. live here)
         variant.setdefault("randomization_kwargs", {})
 
+    # TODO Remove after variant refactor
+    # Sync policy input channels with the definitive frame_stack_size from env config
+    env_frame_stack = variant["randomization_kwargs"]["frame_stack_size"]
+    variant["policy_kwargs"]["input_channels"] = env_frame_stack
+
     eval_env = ClothEnv(**env_kwargs, randomization_kwargs=variant["randomization_kwargs"])
     print(
         "PHYSICS backend:",
@@ -225,7 +230,6 @@ def experiment(variant):
             desired_goal_key=env_keys["desired_goal_key"],
             **variant["path_collector_kwargs"],
         )
-    print(f"Observation space keys: {eval_env.observation_space.spaces.keys()}")
 
     replay_buffer = future_obs_dict_replay_buffer.FutureObsDictRelabelingBuffer(
         ob_spaces=copy.deepcopy(eval_env.observation_space.spaces),

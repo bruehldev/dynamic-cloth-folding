@@ -44,25 +44,9 @@ class BulletClothEnv_:
 
     def __init__(
         self,
-        timestep,
-        sparse_dense,
-        success_distance,
-        goal_noise_range,
-        frame_stack_size,
-        output_max,
-        success_reward,
-        fail_reward,
-        extra_reward,
-        control_frequency,
-        save_folder,
         randomization_kwargs,
-        robot_observation,
-        max_close_steps,
-        task_name="sideways",
-        image_obs_noise_mean=1,
-        image_obs_noise_std=0,
+        save_folder=None,
         has_viewer=False,
-        image_size=100,
         logger: Optional[Any] = None,
         **_,
     ):
@@ -78,29 +62,30 @@ class BulletClothEnv_:
         self.logger = logger
         self.seed()
 
-        # --- Init Params ---
-        self.task_name = task_name
-        self.save_folder = save_folder
-        self.timestep = float(timestep)
-        self.control_frequency = float(control_frequency)
-        self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
-        self.output_max = float(output_max)
-        self.robot_observation = str(robot_observation)
-        self.max_close_steps = int(max_close_steps)
-        self.success_distance = float(success_distance)
-        self.frame_stack_size = int(frame_stack_size)
-        self.goal_noise_range = goal_noise_range
-        self.sparse_dense = sparse_dense
-        self.success_reward = success_reward
-        self.fail_reward = fail_reward
-        self.extra_reward = extra_reward
-        self.image_size = (image_size, image_size)
+        # --- Init Params from kwargs ---
         self.kwargs = randomization_kwargs
         self.enable_dr = self.kwargs["enable_dr"]
 
+        task_cfg = self.kwargs["folding_task"]
+        self.task_name = self.kwargs["task_name"]
+        self.save_folder = save_folder
+        self.timestep = float(self.kwargs["timestep"])
+        self.control_frequency = float(self.kwargs["control_frequency"])
+        self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
+        self.output_max = float(self.kwargs["output_max"])
+        self.robot_observation = str(self.kwargs["robot_observation"])
+        self.max_close_steps = int(self.kwargs["max_close_steps"])
+        self.success_distance = float(task_cfg["success_distance"])
+        self.frame_stack_size = int(self.kwargs["frame_stack_size"])
+        self.sparse_dense = task_cfg["sparse_dense"]
+        self.success_reward = task_cfg["success_reward"]
+        self.fail_reward = task_cfg["fail_reward"]
+        self.extra_reward = task_cfg["extra_reward"]
+        self.image_size = (self.kwargs["image_size"], self.kwargs["image_size"])
+
         self.has_viewer = has_viewer
-        self.image_obs_noise_mean = image_obs_noise_mean
-        self.image_obs_noise_std = image_obs_noise_std
+        self.image_obs_noise_mean = self.kwargs["image_obs_noise_mean"]
+        self.image_obs_noise_std = self.kwargs["image_obs_noise_std"]
 
         # Define action space before reset is called
         self.action_space = gym.spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
@@ -168,13 +153,13 @@ class BulletClothEnv_:
         base_orn = p.getQuaternionFromEuler(robot_cfg["base_orn_euler"])
         self.robot = PandaRobot(base_position=base_pos, base_orientation=base_orn)
         # Robot dynamics DR (only if master switch is ON)
-        if self.enable_dr and self.kwargs["dynamics_randomization"]:
+        if self.enable_dr and self.kwargs.get("dynamics_randomization", True):
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
             _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
             _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))
             # Prefer the PandaRobot helper if present; call positionally for max compatibility.
             self.robot.randomize_dynamics(_lin, _ang, _frc)
-        elif not self.enable_dr:
+        else:  # also covers not self.enable_dr
             _lin = float(robot_cfg["lin_damping"])
             _ang = float(robot_cfg["ang_damping"])
             _frc = float(robot_cfg["lateral_friction"])
@@ -190,15 +175,10 @@ class BulletClothEnv_:
 
         # ---- Cloth domain randomization (physics + size + optional color) ----
 
-        # --- Cloth size: random if DR enabled, else deterministic ---
+        # --- Cloth size ---
         if self.enable_dr:
-            # MuJoCo uses cloth_size, Bullet uses scale. To keep them visually
-            # consistent, we use target_edge_length in DeformableCloth to auto-size.
-            size_range = cloth_cfg["scale_range"]
-            scale_guess = float(self.np_random.uniform(size_range[0], size_range[1]))
+            scale_guess = float(self.np_random.uniform(*cloth_cfg["scale_range"]))
         else:
-            # Use a fixed size if DR is off.
-            # For consistency, this should match MuJoCo's env_kwargs.cloth_size.
             scale_guess = float(cloth_cfg["scale"])
 
         # Clamp to keep Bullet stable
@@ -212,35 +192,11 @@ class BulletClothEnv_:
         extra_clearance = max(0.0, (scale_guess - clearance_thresh)) * extra_clearance_slope
         cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
 
-        if self.enable_dr:
-            friction = float(self.np_random.uniform(*cloth_cfg["friction_range"]))
-            spring_k = float(self.np_random.uniform(*cloth_cfg["spring_k_range"]))
-            spring_c = float(self.np_random.uniform(*cloth_cfg["spring_c_range"]))
-            collision_margin = float(self.np_random.uniform(*cloth_cfg["collision_margin_range"]))
-        else:
-            friction = float(cloth_cfg["friction"])
-            spring_k = float(cloth_cfg["spring_k"])
-            spring_c = float(cloth_cfg["spring_c"])
-            collision_margin = float(cloth_cfg["collision_margin"])
-
-        cloth_kwargs = dict(
-            scale=scale_guess,
-            mass=float(cloth_cfg["mass"]),
-            useNeoHookean=int(cloth_cfg["useNeoHookean"]),
-            useBendingSprings=int(cloth_cfg["useBendingSprings"]),
-            useMassSpring=int(cloth_cfg["useMassSpring"]),
-            springElasticStiffness=spring_k,
-            springDampingStiffness=spring_c,
-            springDampingAllDirections=int(cloth_cfg["damping_all_dirs"]),
-            useSelfCollision=int(cloth_cfg["useSelfCollision"]),
-            frictionCoeff=friction,
-            useFaceContact=int(cloth_cfg["useFaceContact"]),
-            collisionMargin=collision_margin,
+        self.cloth = DeformableCloth(
+            base_position=cloth_pos,
+            cloth_cfg=cloth_cfg,
+            enable_dr=self.enable_dr,
         )
-
-        # No target_edge_length yet (DeformableCloth ignores it in current code)
-        mesh_path = str(cloth_cfg["mesh_path"])
-        self.cloth = DeformableCloth(base_position=cloth_pos, mesh_path=mesh_path, **cloth_kwargs)
 
         # Pass logger down so cloth can report texture DR
         with contextlib.suppress(Exception):
@@ -263,12 +219,8 @@ class BulletClothEnv_:
         self.task = FoldingTask(
             self.task_name,
             self.cloth,
-            self.success_distance,
-            self.goal_noise_range,
-            self.sparse_dense,
-            self.success_reward,
-            self.fail_reward,
-            self.extra_reward,
+            self.kwargs["folding_task"],
+            self.enable_dr,
             self.np_random,
         )
 
