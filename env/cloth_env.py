@@ -1,33 +1,32 @@
 # env/cloth_env.py:
-import mujoco_py
-import osc_binding
-import cv2
-import numpy as np
 import copy
-from gym.utils import seeding, EzPickle
-from utils import reward_calculation
-import gym
-import os
-from scipy import spatial
-from env.template_renderer import TemplateRenderer
-import math
-from collections import deque
-import copy
-from utils import mujoco_model_kwargs
-from shutil import copyfile
-import psutil
 import gc
-from xml.dom import minidom
-from mujoco_py.utils import remove_empty_lines
-import albumentations as A
-import pandas as pd
-from utils import task_definitions
 import logging
-from df_logging import RunLogger
+import math
+import os
+from collections import deque
+from shutil import copyfile
 from typing import Optional
+from xml.dom import minidom
+
+import albumentations as A
+import cv2
+import gym
+import mujoco_py
+import numpy as np
+import osc_binding
+import pandas as pd
+import psutil
+from gym.utils import EzPickle, seeding
+from mujoco_py.utils import remove_empty_lines
+from scipy import spatial
+
+from df_logging import RunLogger
+from env.template_renderer import TemplateRenderer
+from utils import mujoco_model_kwargs, reward_calculation, task_definitions
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+logging.basicConfig(level=logging.DEBUG, format="%(message)s")
 
 
 def compute_cosine_distance(vec1, vec2):
@@ -41,7 +40,7 @@ def compute_cosine_distance(vec1, vec2):
             return cosine_dist
 
 
-class ClothEnv_(object):
+class ClothEnv_:
     def __init__(
         self,
         timestep,
@@ -66,10 +65,10 @@ class ClothEnv_(object):
         image_obs_noise_std=0,
         has_viewer=True,
         image_size=100,
-        logger: Optional[RunLogger] = None
+        logger: Optional[RunLogger] = None,
     ):
         self.logger = logger
-        _pylog = logging.getLogger(__name__) 
+        _pylog = logging.getLogger(__name__)
 
         def _note(level, msg):
             if level == "info":
@@ -83,19 +82,19 @@ class ClothEnv_(object):
 
         self._note = _note
         from tools.jsonl_tap import StepTap
+
         self._backend_name = "mujoco"
         self._episode_idx = 0
         self._tap = StepTap(os.path.join(save_folder, f"step_tap_{self._backend_name}.jsonl"))
         self.albumentations_transform = A.Compose(
             [
-                A.RGBShift(r_shift_limit=15, g_shift_limit=15,
-                           b_shift_limit=15, p=0.5),
+                A.RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.5),
                 A.RandomBrightnessContrast(p=0.5),
                 A.Blur(blur_limit=7, always_apply=False, p=0.5),
-                A.ColorJitter(brightness=0.2, contrast=0.2,
-                              saturation=0.2, hue=0.2, always_apply=False, p=0.5),
-                A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0,
-                               always_apply=False, p=0.5),
+                A.ColorJitter(
+                    brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, always_apply=False, p=0.5
+                ),
+                A.GaussianBlur(blur_limit=(3, 7), sigma_limit=0, always_apply=False, p=0.5),
             ]
         )
 
@@ -106,7 +105,7 @@ class ClothEnv_(object):
             if self.model_kwargs_path and os.path.exists(self.model_kwargs_path):
                 df = pd.read_csv(self.model_kwargs_path)
                 # "Unnamed: 0" o.ä. verwerfen
-                df = df.loc[:, ~df.columns.str.contains(r'^Unnamed', case=False, regex=True)]
+                df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", case=False, regex=True)]
                 self.model_kwargs_df = df
                 self.expected_model_cols = list(df.columns)
                 if self.logger:
@@ -115,7 +114,9 @@ class ClothEnv_(object):
                 self.model_kwargs_df = pd.DataFrame()
                 self.expected_model_cols = []
                 if self.logger:
-                    self._note("warning", "[ClothEnv] Model kwargs CSV not found – using empty dataframe.")
+                    self._note(
+                        "warning", "[ClothEnv] Model kwargs CSV not found – using empty dataframe."
+                    )
         except Exception as e:
             self.model_kwargs_df = pd.DataFrame()
             self.expected_model_cols = []
@@ -159,7 +160,7 @@ class ClothEnv_(object):
         self.control_frequency = control_frequency
 
         steps_per_second = 1 / self.timestep
-        self.substeps = int(1 / (self.timestep*self.control_frequency))
+        self.substeps = int(1 / (self.timestep * self.control_frequency))
         self.between_steps = 1000 / steps_per_second
         self.delta_tau_max = 1000 / steps_per_second
         self.eval_camera = "eval_camera"
@@ -167,24 +168,24 @@ class ClothEnv_(object):
 
         self.seed()
         self.initial_qpos = np.array(
-            [0.212422, 0.362907, -0.00733391, -1.9649, -0.0198034, 2.37451, -1.50499])
+            [0.212422, 0.362907, -0.00733391, -1.9649, -0.0198034, 2.37451, -1.50499]
+        )
 
-        self.ee_site_name = 'grip_site'
-        self.joints = ["joint1", "joint2", "joint3",
-                       "joint4", "joint5", "joint6", "joint7"]
+        self.ee_site_name = "grip_site"
+        self.joints = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 
         self.mjpy_model = None
         self.sim = None
         self.viewer = None
 
         model_kwargs, model_numerical_values = self.build_xml_kwargs_and_numerical_values(
-            randomize=self.randomization_kwargs['dynamics_randomization'])
+            randomize=self.randomization_kwargs["dynamics_randomization"]
+        )
         self.mujoco_model_numerical_values = model_numerical_values
         self.setup_initial_state_and_sim(model_kwargs)
         self.dump_xml_models()
 
-        self.action_space = gym.spaces.Box(-1,
-                                           1, shape=(3,), dtype='float32')
+        self.action_space = gym.spaces.Box(-1, 1, shape=(3,), dtype="float32")
 
         self.relative_origin = self.get_ee_position_W()
         self.goal, self.goal_noise = self.sample_goal_I()
@@ -196,34 +197,42 @@ class ClothEnv_(object):
             self.frame_stack.append(image_obs)
         obs = self.get_obs()
 
-        self.observation_space = gym.spaces.Dict(dict(
-            desired_goal=gym.spaces.Box(-np.inf, np.inf,
-                                        shape=obs['achieved_goal'].shape, dtype='float32'),
-            achieved_goal=gym.spaces.Box(-np.inf, np.inf,
-                                         shape=obs['achieved_goal'].shape, dtype='float32'),
-            observation=gym.spaces.Box(-np.inf, np.inf,
-                                       shape=obs['observation'].shape, dtype='float32'),
-            robot_observation=gym.spaces.Box(-np.inf, np.inf,
-                                             shape=obs['robot_observation'].shape, dtype='float32'),
-            image=gym.spaces.Box(-np.inf, np.inf,
-                                 shape=obs['image'].shape, dtype='float32')
-        ))
+        self.observation_space = gym.spaces.Dict(
+            dict(
+                desired_goal=gym.spaces.Box(
+                    -np.inf, np.inf, shape=obs["achieved_goal"].shape, dtype="float32"
+                ),
+                achieved_goal=gym.spaces.Box(
+                    -np.inf, np.inf, shape=obs["achieved_goal"].shape, dtype="float32"
+                ),
+                observation=gym.spaces.Box(
+                    -np.inf, np.inf, shape=obs["observation"].shape, dtype="float32"
+                ),
+                robot_observation=gym.spaces.Box(
+                    -np.inf, np.inf, shape=obs["robot_observation"].shape, dtype="float32"
+                ),
+                image=gym.spaces.Box(-np.inf, np.inf, shape=obs["image"].shape, dtype="float32"),
+            )
+        )
 
     def get_model_kwargs(self, *args, **kwargs):
         import numpy as np
+
         df = getattr(self, "model_kwargs_df", None)
         model_kwargs = {}
 
         # Falls kein DF: leere Defaults
         if df is None or len(df) == 0:
             if self.logger:
-                self._note("warning", "[ClothEnv] get_model_kwargs: CSV empty/missing – using defaults.")
+                self._note(
+                    "warning", "[ClothEnv] get_model_kwargs: CSV empty/missing – using defaults."
+                )
 
             # Mindestens für build_xml_kwargs_and_numerical_values benötigt:
             # geom_size wird weiter unten auch noch abgesichert
             return model_kwargs
 
-        rownum = kwargs.get("rownum", None)
+        rownum = kwargs.get("rownum")
         model_kwargs_row = None
 
         # 1) Falls eine explizite Zeile gewünscht ist
@@ -237,7 +246,15 @@ class ClothEnv_(object):
             if "cloth_size" in df.columns:
                 try:
                     cs = float(self.randomization_kwargs.get("cloth_size", np.nan))
-                    matches = matches[np.isclose(matches["cloth_size"].astype(float), cs, atol=1e-9, rtol=0, equal_nan=True)]
+                    matches = matches[
+                        np.isclose(
+                            matches["cloth_size"].astype(float),
+                            cs,
+                            atol=1e-9,
+                            rtol=0,
+                            equal_nan=True,
+                        )
+                    ]
                 except Exception:
                     pass
             # Camera config match (wenn Spalte existiert)
@@ -262,7 +279,10 @@ class ClothEnv_(object):
         # 3) Fallback: erste Zeile des DF
         if model_kwargs_row is None:
             if self.logger:
-                self._note("warning", "[ClothEnv] get_model_kwargs: no match – falling back to first CSV row.")
+                self._note(
+                    "warning",
+                    "[ClothEnv] get_model_kwargs: no match – falling back to first CSV row.",
+                )
             model_kwargs_row = df.iloc[0]
 
         # 4) Key-Value übernehmen
@@ -277,64 +297,85 @@ class ClothEnv_(object):
 
         return model_kwargs
 
-
-
     def build_xml_kwargs_and_numerical_values(self, randomize, rownum=None):
-        model_kwargs = self.get_model_kwargs(
-            randomize=randomize, rownum=rownum)
+        model_kwargs = self.get_model_kwargs(randomize=randomize, rownum=rownum)
         model_kwargs.setdefault("geom_size", 0.005)
 
-
         model_numerical_values = []
-        for key in model_kwargs.keys():
+        for key in model_kwargs.keys():  # noqa: SIM118
             value = model_kwargs[key]
             if type(value) in [int, float]:
                 model_numerical_values.append(value)
 
-        model_kwargs['floor_material_name'] = "floor_real_material"
-        model_kwargs['table_material_name'] = "table_real_material"
-        model_kwargs['cloth_material_name'] = "wipe_real_material"
-        if self.randomization_kwargs['materials_randomization']:
-            model_kwargs['floor_material_name'] = np.random.choice(
-                ["floor_real_material", "floor_material"])
-            model_kwargs['table_material_name'] = np.random.choice(
-                ["table_real_material", "table_material"])
-            model_kwargs['cloth_material_name'] = np.random.choice(["bath_real_material", "bath_2_real_material", "kitchen_real_material", "kitchen_2_real_material",
-                                                                   "wipe_real_material", "wipe_2_real_material", "cloth_material", "white_real_material", "blue_real_material", "orange_real_material"])
+        model_kwargs["floor_material_name"] = "floor_real_material"
+        model_kwargs["table_material_name"] = "table_real_material"
+        model_kwargs["cloth_material_name"] = "wipe_real_material"
+        if self.randomization_kwargs["materials_randomization"]:
+            model_kwargs["floor_material_name"] = np.random.choice(
+                ["floor_real_material", "floor_material"]
+            )
+            model_kwargs["table_material_name"] = np.random.choice(
+                ["table_real_material", "table_material"]
+            )
+            model_kwargs["cloth_material_name"] = np.random.choice(
+                [
+                    "bath_real_material",
+                    "bath_2_real_material",
+                    "kitchen_real_material",
+                    "kitchen_2_real_material",
+                    "wipe_real_material",
+                    "wipe_2_real_material",
+                    "cloth_material",
+                    "white_real_material",
+                    "blue_real_material",
+                    "orange_real_material",
+                ]
+            )
 
         # General
-        model_kwargs['timestep'] = self.timestep
-        model_kwargs['lights_randomization'] = self.randomization_kwargs['lights_randomization']
-        model_kwargs['materials_randomization'] = self.randomization_kwargs['materials_randomization']
-        model_kwargs['train_camera_fovy'] = (self.randomization_kwargs['camera_config']
-                                             ['fovy_range'][0] + self.randomization_kwargs['camera_config']['fovy_range'][1])/2
-        model_kwargs['num_lights'] = 1
+        model_kwargs["timestep"] = self.timestep
+        model_kwargs["lights_randomization"] = self.randomization_kwargs["lights_randomization"]
+        model_kwargs["materials_randomization"] = self.randomization_kwargs[
+            "materials_randomization"
+        ]
+        model_kwargs["train_camera_fovy"] = (
+            self.randomization_kwargs["camera_config"]["fovy_range"][0]
+            + self.randomization_kwargs["camera_config"]["fovy_range"][1]
+        ) / 2
+        model_kwargs["num_lights"] = 1
 
-        model_kwargs['geom_spacing'] = (
-            self.randomization_kwargs['cloth_size'] - 2*model_kwargs['geom_size']) / 8
-        model_kwargs['offset'] = 4 * model_kwargs['geom_spacing']
+        model_kwargs["geom_spacing"] = (
+            self.randomization_kwargs["cloth_size"] - 2 * model_kwargs["geom_size"]
+        ) / 8
+        model_kwargs["offset"] = 4 * model_kwargs["geom_spacing"]
 
         # Appearance
         appearance_choices = mujoco_model_kwargs.appearance_kwarg_choices
         appearance_ranges = mujoco_model_kwargs.appearance_kwarg_ranges
-        for key in appearance_choices.keys():
+        for key in appearance_choices.keys():  # noqa: SIM118
             model_kwargs[key] = np.random.choice(appearance_choices[key])
-        for key in appearance_ranges.keys():
+        for key in appearance_ranges.keys():  # noqa: SIM118
             values = appearance_ranges[key]
             model_kwargs[key] = np.random.uniform(values[0], values[1])
 
         # Camera fovy
-        if self.randomization_kwargs['camera_position_randomization']:
-            model_kwargs['train_camera_fovy'] = np.random.uniform(
-                self.randomization_kwargs['camera_config']['fovy_range'][0], self.randomization_kwargs['camera_config']['fovy_range'][1])
+        if self.randomization_kwargs["camera_position_randomization"]:
+            model_kwargs["train_camera_fovy"] = np.random.uniform(
+                self.randomization_kwargs["camera_config"]["fovy_range"][0],
+                self.randomization_kwargs["camera_config"]["fovy_range"][1],
+            )
 
         min_corner = 0
         max_corner = 8
         self.max_corner_name = f"B{max_corner}_{max_corner}"
         self.mid_corner_index = 4
         mid = int(max_corner / 2)
-        self.corner_index_mapping = {"0": f"S{min_corner}_{max_corner}", "1": f"S{max_corner}_{max_corner}",
-                                     "2": f"S{min_corner}_{min_corner}", "3": f"S{max_corner}_{min_corner}"}
+        self.corner_index_mapping = {
+            "0": f"S{min_corner}_{max_corner}",
+            "1": f"S{max_corner}_{max_corner}",
+            "2": f"S{min_corner}_{min_corner}",
+            "3": f"S{max_corner}_{min_corner}",
+        }
         self.cloth_site_names = []
 
         for i in [min_corner, mid, max_corner]:
@@ -342,43 +383,49 @@ class ClothEnv_(object):
                 self.cloth_site_names.append(f"S{i}_{j}")
 
         # TODO: remove side effects from methods,
-        self.constraints = task_definitions.constraints["sideways"](
-            0, 4, 8, self.success_distance)
+        self.constraints = task_definitions.constraints["sideways"](0, 4, 8, self.success_distance)
 
         self.task_reward_function = reward_calculation.get_task_reward_function(
-            self.constraints, self.single_goal_dim, self.sparse_dense, self.success_reward, self.fail_reward, self.extra_reward)
+            self.constraints,
+            self.single_goal_dim,
+            self.sparse_dense,
+            self.success_reward,
+            self.fail_reward,
+            self.extra_reward,
+        )
 
         return model_kwargs, model_numerical_values
 
     def setup_viewer(self):
         if self.has_viewer:
-            if not self.viewer is None:
+            if self.viewer is not None:
                 del self.viewer
-            self.viewer = mujoco_py.MjRenderContextOffscreen(
-                self.sim, device_id=-1)
+            self.viewer = mujoco_py.MjRenderContextOffscreen(self.sim, device_id=-1)
             self.viewer.vopt.geomgroup[0] = 0
             self.viewer.vopt.geomgroup[1] = 1
 
     def dump_xml_models(self):
         with open(f"{self.save_folder}/compiled_mujoco_model_no_inertias.xml", "w") as f:
-            self.sim.save(f, format='xml', keep_inertials=False)
+            self.sim.save(f, format="xml", keep_inertials=False)
 
         with open(f"{self.save_folder}/compiled_mujoco_model_with_intertias.xml", "w") as f:
-            self.sim.save(f, format='xml', keep_inertials=True)
+            self.sim.save(f, format="xml", keep_inertials=True)
 
     def reset_camera(self):
         lookat_offset = np.zeros(3)
-        self.train_camera = self.randomization_kwargs['camera_type']
+        self.train_camera = self.randomization_kwargs["camera_type"]
         if self.train_camera == "all":
             self.train_camera = np.random.choice(["up", "front", "side"])
 
-        if self.randomization_kwargs['lookat_position_randomization']:
-            radius = self.randomization_kwargs['lookat_position_randomization_radius']
+        if self.randomization_kwargs["lookat_position_randomization"]:
+            radius = self.randomization_kwargs["lookat_position_randomization_radius"]
             lookat_offset[0] += np.random.uniform(-radius, radius)
             lookat_offset[1] += np.random.uniform(-radius, radius)
 
-        des_cam_look_pos = self.sim.data.get_body_xpos(
-            f"B{self.mid_corner_index}_{self.mid_corner_index}").copy() + lookat_offset
+        des_cam_look_pos = (
+            self.sim.data.get_body_xpos(f"B{self.mid_corner_index}_{self.mid_corner_index}").copy()
+            + lookat_offset
+        )
         self.sim.data.set_mocap_pos("lookatbody", des_cam_look_pos)
 
     def add_mocap_to_xml(self, xml):
@@ -387,19 +434,18 @@ class ClothEnv_(object):
             if subelement.getAttribute("name") == self.max_corner_name:
                 subelement.setAttribute("mocap", "true")
                 for child_node in subelement.childNodes:
-                    if child_node.nodeType == 1:
+                    if child_node.nodeType == 1:  # noqa: SIM102
                         if child_node.tagName == "joint":
                             subelement.removeChild(child_node)
 
         return remove_empty_lines(dom.toprettyxml(indent=" " * 4))
 
     def setup_initial_state_and_sim(self, model_kwargs):
-        if not self.mjpy_model is None:
+        if self.mjpy_model is not None:
             del self.mjpy_model
-        if not self.sim is None:
+        if self.sim is not None:
             del self.sim
-        temp_xml_1 = self.template_renderer.render_template(
-            "arena.xml", **model_kwargs)
+        temp_xml_1 = self.template_renderer.render_template("arena.xml", **model_kwargs)
         temp_model = mujoco_py.load_model_from_xml(temp_xml_1)
         temp_xml_2 = copy.deepcopy(temp_model.get_xml())
         del temp_model
@@ -417,14 +463,10 @@ class ClothEnv_(object):
         body_id = self.sim.model.body_name2id(self.max_corner_name)
         self.ee_mocap_id = self.sim.model.body_mocapid[body_id]
 
-        self.joint_indexes = [self.sim.model.joint_name2id(
-            joint) for joint in self.joints]
-        self.joint_pos_addr = [self.sim.model.get_joint_qpos_addr(
-            joint) for joint in self.joints]
-        self.joint_vel_addr = [self.sim.model.get_joint_qvel_addr(
-            joint) for joint in self.joints]
-        self.ee_site_adr = mujoco_py.functions.mj_name2id(
-            self.sim.model, 6, "grip_site")
+        self.joint_indexes = [self.sim.model.joint_name2id(joint) for joint in self.joints]
+        self.joint_pos_addr = [self.sim.model.get_joint_qpos_addr(joint) for joint in self.joints]
+        self.joint_vel_addr = [self.sim.model.get_joint_qvel_addr(joint) for joint in self.joints]
+        self.ee_site_adr = mujoco_py.functions.mj_name2id(self.sim.model, 6, "grip_site")
 
         # Sets robot to initial qpos and resets osc values
         self.set_robot_initial_joints()
@@ -433,14 +475,14 @@ class ClothEnv_(object):
 
         for _ in range(30):
             mujoco_py.functions.mj_step1(self.sim.model, self.sim.data)
-            self.sim.data.qfrc_applied[self.joint_vel_addr] = self.sim.data.qfrc_bias[self.joint_vel_addr]
+            self.sim.data.qfrc_applied[self.joint_vel_addr] = self.sim.data.qfrc_bias[
+                self.joint_vel_addr
+            ]
             mujoco_py.functions.mj_step2(self.sim.model, self.sim.data)
 
         self.initial_state = copy.deepcopy(self.sim.get_state())
-        self.initial_qfrc_applied = self.sim.data.qfrc_applied[self.joint_vel_addr].copy(
-        )
-        self.initial_qfrc_bias = self.sim.data.qfrc_bias[self.joint_vel_addr].copy(
-        )
+        self.initial_qfrc_applied = self.sim.data.qfrc_applied[self.joint_vel_addr].copy()
+        self.initial_qfrc_bias = self.sim.data.qfrc_bias[self.joint_vel_addr].copy()
 
     def set_robot_initial_joints(self):
         for j, joint in enumerate(self.joints):
@@ -450,55 +492,56 @@ class ClothEnv_(object):
             self.sim.forward()
 
     def run_controller(self):
-        tau = osc_binding.step_controller(self.initial_O_T_EE,
-                                          self.O_T_EE,
-                                          self.initial_joint_osc,
-                                          self.joint_pos_osc,
-                                          self.joint_vel_osc,
-                                          self.mass_matrix_osc,
-                                          self.jac_osc,
-                                          np.zeros(7),
-                                          self.tau_J_d_osc,
-                                          self.desired_pos_ctrl_W,
-                                          np.zeros(3),
-                                          self.delta_tau_max,
-                                          self.kp,
-                                          self.kp,
-                                          self.damping_ratio
-                                          )
+        tau = osc_binding.step_controller(
+            self.initial_O_T_EE,
+            self.O_T_EE,
+            self.initial_joint_osc,
+            self.joint_pos_osc,
+            self.joint_vel_osc,
+            self.mass_matrix_osc,
+            self.jac_osc,
+            np.zeros(7),
+            self.tau_J_d_osc,
+            self.desired_pos_ctrl_W,
+            np.zeros(3),
+            self.delta_tau_max,
+            self.kp,
+            self.kp,
+            self.damping_ratio,
+        )
         torques = tau.flatten()
         return torques
 
     def step_env(self):
-        self.sim.data.mocap_pos[self.ee_mocap_id][:] = self.sim.data.get_geom_xpos(
-            "grip_geom")
+        self.sim.data.mocap_pos[self.ee_mocap_id][:] = self.sim.data.get_geom_xpos("grip_geom")
 
         mujoco_py.functions.mj_step1(self.sim.model, self.sim.data)
         self.update_osc_values()
         tau = self.run_controller()
-        self.sim.data.qfrc_applied[self.joint_vel_addr] = self.sim.data.qfrc_bias[self.joint_vel_addr] + tau
+        self.sim.data.qfrc_applied[self.joint_vel_addr] = (
+            self.sim.data.qfrc_bias[self.joint_vel_addr] + tau
+        )
         mujoco_py.functions.mj_step2(self.sim.model, self.sim.data)
 
     def step(self, action):
         raw_action = action.copy()
-        action = raw_action*self.output_max
+        action = raw_action * self.output_max
 
         prev_action_before_update = self.previous_raw_action.copy()
 
-        image_obs_substep_idx_mean = self.image_obs_noise_mean * \
-            (self.substeps-1)
-        image_obs_substep_idx = int(np.random.normal(
-            image_obs_substep_idx_mean, self.image_obs_noise_std))
-        image_obs_substep_idx = np.clip(
-            image_obs_substep_idx, 0, self.substeps-1)
+        image_obs_substep_idx_mean = self.image_obs_noise_mean * (self.substeps - 1)
+        image_obs_substep_idx = int(
+            np.random.normal(image_obs_substep_idx_mean, self.image_obs_noise_std)
+        )
+        image_obs_substep_idx = np.clip(image_obs_substep_idx, 0, self.substeps - 1)
 
-        cosine_distance = compute_cosine_distance(
-            self.previous_raw_action, raw_action)
+        cosine_distance = compute_cosine_distance(self.previous_raw_action, raw_action)
 
         previous_desired_pos_step_W = self.desired_pos_step_W.copy()
         desired_pos_step_W = previous_desired_pos_step_W + action
         self.desired_pos_step_W = np.clip(
-            desired_pos_step_W, self.min_absolute_W, self.max_absolute_W)
+            desired_pos_step_W, self.min_absolute_W, self.max_absolute_W
+        )
         x_target = self.desired_pos_step_W.copy()
 
         ctrl_samples = []
@@ -509,19 +552,26 @@ class ClothEnv_(object):
         self.current_step = getattr(self, "current_step", 0)
 
         for i in range(self.substeps):
-            for j in range(int(self.between_steps)):
-                self.desired_pos_ctrl_W = self.filter * self.desired_pos_step_W + (1 - self.filter) * self.desired_pos_ctrl_W
+            for j in range(int(self.between_steps)):  # noqa: B007
+                self.desired_pos_ctrl_W = (
+                    self.filter * self.desired_pos_step_W
+                    + (1 - self.filter) * self.desired_pos_ctrl_W
+                )
             self.step_env()
 
             if i in (0, int(self.substeps / 2), int(self.substeps - 1)):
-                ctrl_samples.append({
-                    "idx": int(i + 1),
-                    "x_des": self.desired_pos_ctrl_W.tolist(),
-                    "q_cmd": self.target_qpos.tolist() if hasattr(self, "target_qpos") else None,
-                    "q": self.get_joint_positions().tolist(),
-                    "dq": self.get_joint_velocities().tolist(),
-                    "x_ee": self.get_ee_position_W().tolist()
-                })
+                ctrl_samples.append(
+                    {
+                        "idx": int(i + 1),
+                        "x_des": self.desired_pos_ctrl_W.tolist(),
+                        "q_cmd": self.target_qpos.tolist()
+                        if hasattr(self, "target_qpos")
+                        else None,
+                        "q": self.get_joint_positions().tolist(),
+                        "dq": self.get_joint_velocities().tolist(),
+                        "x_ee": self.get_ee_position_W().tolist(),
+                    }
+                )
 
             if i == image_obs_substep_idx:
                 image_obs = self.get_image_obs()
@@ -530,13 +580,15 @@ class ClothEnv_(object):
 
         obs = self.get_obs()
         reward, done, info = self.post_action(obs, raw_action, cosine_distance)
-        info['corner_positions'] = flattened_corners
+        info["corner_positions"] = flattened_corners
 
         # Logging
         if self.logger:
             img_u8 = (image_obs.reshape(self.image_size) * 255).astype("uint8")
             img_info = self.logger.save_image_gray(img_u8)
-            ctrl_block = self.logger.build_controller_block(policy_step=self.current_step, substeps=ctrl_samples)
+            ctrl_block = self.logger.build_controller_block(
+                policy_step=self.current_step, substeps=ctrl_samples
+            )
             rec = {
                 "t_policy": float(self.timestep * self.current_step),
                 "episode_step": int(self.current_step),
@@ -546,20 +598,20 @@ class ClothEnv_(object):
                     "dq": self.get_joint_velocities().tolist(),
                     "x_ee": self.get_ee_position_W().tolist(),
                     "g": self.goal.tolist(),
-                    "a_prev": prev_action_before_update.tolist()
+                    "a_prev": prev_action_before_update.tolist(),
                 },
                 "action": {
                     "a": raw_action.tolist(),
                     "x_target": x_target.tolist(),
                     "interp_lambda": float(self.filter),
-                    "cloth_uv_pred": info.get("predicted_corners", None)
+                    "cloth_uv_pred": info.get("predicted_corners", None),
                 },
                 "task": {
                     "reward_t": float(reward),
                     "dsum": float(info.get("dsum", 0.0)),
                     "done": bool(done),
-                    "success": bool(info.get("is_success", False))
-                }
+                    "success": bool(info.get("is_success", False)),
+                },
             }
             self.logger.log_policy_step(self.current_step, rec, controller_block=ctrl_block)
 
@@ -568,13 +620,12 @@ class ClothEnv_(object):
                 "steps": int(self.current_step + 1),
                 "success": bool(info.get("is_success", False)),
                 "final_dsum": float(info.get("dsum", 0.0)),
-                "termination_reason": info.get("termination_reason", "")
+                "termination_reason": info.get("termination_reason", ""),
             }
             self.logger.end_episode(summary)
 
         self.previous_raw_action = raw_action.copy()
         self.current_step += 1
-
 
         if hasattr(self, "_tap") and self._tap:
             self._tap.log_step(
@@ -584,7 +635,9 @@ class ClothEnv_(object):
                 action=self.previous_raw_action.tolist(),  # <— ensure serializable
                 reward=float(reward),
                 done=bool(done),
-                info={k: (float(v) if isinstance(v, (np.floating,)) else v) for k, v in info.items()},
+                info={
+                    k: (float(v) if isinstance(v, (np.floating,)) else v) for k, v in info.items()
+                },
             )
 
         return obs, reward, done, info
@@ -594,59 +647,62 @@ class ClothEnv_(object):
 
     def post_action_image_capture(self):
         camera_matrix, camera_transformation = self.get_camera_matrices(
-            self.train_camera, self.image_size[0], self.image_size[1])
+            self.train_camera, self.image_size[0], self.image_size[1]
+        )
         corners_in_image = self.get_corner_image_positions(
-            self.image_size[0], self.image_size[0], camera_matrix, camera_transformation)
+            self.image_size[0], self.image_size[0], camera_matrix, camera_transformation
+        )
         flattened_corners = []
         for corner in corners_in_image:
-            flattened_corners.append(corner[0]/self.image_size[0])
-            flattened_corners.append(corner[1]/self.image_size[1])
+            flattened_corners.append(corner[0] / self.image_size[0])
+            flattened_corners.append(corner[1] / self.image_size[1])
         flattened_corners = np.array(flattened_corners)
 
         return flattened_corners
 
     def get_corner_constraint_distances(self):
-        inv_corner_index_mapping = {v: k for k,
-                                    v in self.corner_index_mapping.items()}
+        inv_corner_index_mapping = {v: k for k, v in self.corner_index_mapping.items()}
         distances = {"0": 0, "1": 0, "2": 0, "3": 0}
         for i, contraint in enumerate(self.constraints):
-            if contraint['origin'] in inv_corner_index_mapping.keys():
-                origin_pos = self.sim.data.get_site_xpos(
-                    contraint['origin']).copy() - self.relative_origin
-                target_pos = self.goal[i *
-                                       self.single_goal_dim:(i+1)*self.single_goal_dim]
-                distances[inv_corner_index_mapping[contraint['origin']]
-                          ] = np.linalg.norm(origin_pos-target_pos)
+            if contraint["origin"] in inv_corner_index_mapping:
+                origin_pos = (
+                    self.sim.data.get_site_xpos(contraint["origin"]).copy() - self.relative_origin
+                )
+                target_pos = self.goal[i * self.single_goal_dim : (i + 1) * self.single_goal_dim]
+                distances[inv_corner_index_mapping[contraint["origin"]]] = np.linalg.norm(
+                    origin_pos - target_pos
+                )
         return distances
 
     def post_action(self, obs, raw_action, cosine_distance):
-        reward = self.compute_task_reward(np.reshape(
-            obs['achieved_goal'], (1, -1)), np.reshape(self.goal, (1, -1)), dict())[0]
+        reward = self.compute_task_reward(
+            np.reshape(obs["achieved_goal"], (1, -1)), np.reshape(self.goal, (1, -1)), dict()
+        )[0]
         is_success = reward > self.fail_reward
 
         delta_size = np.linalg.norm(raw_action)
-        ctrl_error = np.linalg.norm(
-            self.desired_pos_ctrl_W - self.get_ee_position_W())
+        ctrl_error = np.linalg.norm(self.desired_pos_ctrl_W - self.get_ee_position_W())
 
         if is_success and self.episode_ee_close_steps == 0:
-            logger.debug(
-                f"Successful fold, reward: {np.round(reward, decimals=3)}")
+            logger.debug(f"Successful fold, reward: {np.round(reward, decimals=3)}")
 
         env_memory_usage = self.process.memory_info().rss
         info = {
             "reward": reward,
-            'is_success': is_success,
+            "is_success": is_success,
             "delta_size": delta_size,
             "ctrl_error": ctrl_error,
             "env_memory_usage": env_memory_usage,
-            "corner_sum_error": 0
+            "corner_sum_error": 0,
         }
 
         constraint_distances = self.get_corner_constraint_distances()
 
-        for key in constraint_distances.keys():
+        for key in constraint_distances.keys():  # noqa: SIM118
             info[f"corner_{key}"] = constraint_distances[key]
             info["corner_sum_error"] += constraint_distances[key]
+
+        print(f"Corner sum error: {info['corner_sum_error']}")
 
         info["dsum"] = info["corner_sum_error"]
         done = False
@@ -667,13 +723,14 @@ class ClothEnv_(object):
         self.O_T_EE = np.ndarray(shape=(16,), dtype=np.float64)
         self.jac_osc = np.ndarray(shape=(42,), dtype=np.float64)
         self.mass_matrix_osc = np.ndarray(shape=(49,), dtype=np.float64)
-        self.tau_J_d_osc = self.sim.data.qfrc_applied[self.joint_vel_addr] - \
-            self.sim.data.qfrc_bias[self.joint_vel_addr]
+        self.tau_J_d_osc = (
+            self.sim.data.qfrc_applied[self.joint_vel_addr]
+            - self.sim.data.qfrc_bias[self.joint_vel_addr]
+        )
 
         L = len(self.sim.data.qvel)
         p = self.sim.data.site_xpos[self.ee_site_adr]
-        R = self.sim.data.site_xmat[self.ee_site_adr].reshape(
-            [3, 3]).T  # SAATANA
+        R = self.sim.data.site_xmat[self.ee_site_adr].reshape([3, 3]).T  # SAATANA
 
         self.O_T_EE[0] = R[0, 0]
         self.O_T_EE[1] = R[0, 1]
@@ -696,32 +753,31 @@ class ClothEnv_(object):
         self.O_T_EE[15] = 1.0
 
         for j in range(7):
-            self.joint_pos_osc[j] = self.sim.data.qpos[self.joint_pos_addr[j]].copy(
-            )
-            self.joint_vel_osc[j] = self.sim.data.qvel[self.joint_vel_addr[j]].copy(
-            )
+            self.joint_pos_osc[j] = self.sim.data.qpos[self.joint_pos_addr[j]].copy()
+            self.joint_vel_osc[j] = self.sim.data.qvel[self.joint_vel_addr[j]].copy()
 
-        jac_pos_osc = np.ndarray(shape=(L*3,), dtype=np.float64)
-        jac_rot_osc = np.ndarray(shape=(L*3,), dtype=np.float64)
+        jac_pos_osc = np.ndarray(shape=(L * 3,), dtype=np.float64)
+        jac_rot_osc = np.ndarray(shape=(L * 3,), dtype=np.float64)
         mujoco_py.functions.mj_jacSite(
-            self.sim.model, self.sim.data, jac_pos_osc, jac_rot_osc, self.ee_site_adr)
+            self.sim.model, self.sim.data, jac_pos_osc, jac_rot_osc, self.ee_site_adr
+        )
 
         for j in range(7):
             for r in range(6):
-                if (r < 3):
-                    value = jac_pos_osc[L*r + self.joint_pos_addr[j]]
+                if r < 3:
+                    value = jac_pos_osc[L * r + self.joint_pos_addr[j]]
                 else:
-                    value = jac_rot_osc[L*(r-3) + self.joint_pos_addr[j]]
-                self.jac_osc[j*6 + r] = value
+                    value = jac_rot_osc[L * (r - 3) + self.joint_pos_addr[j]]
+                self.jac_osc[j * 6 + r] = value
 
-        mass_array_osc = np.ndarray(shape=(L ** 2,), dtype=np.float64)
-        mujoco_py.cymj._mj_fullM(
-            self.sim.model, mass_array_osc, self.sim.data.qM)
+        mass_array_osc = np.ndarray(shape=(L**2,), dtype=np.float64)
+        mujoco_py.cymj._mj_fullM(self.sim.model, mass_array_osc, self.sim.data.qM)
 
         for c in range(7):
             for r in range(7):
-                self.mass_matrix_osc[c*7 + r] = mass_array_osc[self.joint_pos_addr[r]
-                                                               * L + self.joint_pos_addr[c]]
+                self.mass_matrix_osc[c * 7 + r] = mass_array_osc[
+                    self.joint_pos_addr[r] * L + self.joint_pos_addr[c]
+                ]
 
         if self.initial_O_T_EE is None:
             self.initial_O_T_EE = self.O_T_EE.copy()
@@ -739,15 +795,15 @@ class ClothEnv_(object):
 
     def get_trajectory_log_entry(self):
         entry = {
-            'origin': self.relative_origin,
-            'output_max': self.output_max,
-            'desired_pos_step_I': self.desired_pos_step_W - self.relative_origin,
-            'desired_pos_ctrl_I': self.desired_pos_ctrl_W - self.relative_origin,
-            'ee_position_I': self.get_ee_position_I(),
-            'raw_action': self.previous_raw_action,
-            'substeps': self.substeps,
-            'timestep': self.timestep,
-            'goal_noise': self.goal_noise
+            "origin": self.relative_origin,
+            "output_max": self.output_max,
+            "desired_pos_step_I": self.desired_pos_step_W - self.relative_origin,
+            "desired_pos_ctrl_I": self.desired_pos_ctrl_W - self.relative_origin,
+            "ee_position_I": self.get_ee_position_I(),
+            "raw_action": self.previous_raw_action,
+            "substeps": self.substeps,
+            "timestep": self.timestep,
+            "goal_noise": self.goal_noise,
         }
         return entry
 
@@ -758,13 +814,11 @@ class ClothEnv_(object):
         return self.sim.data.get_site_xpos(self.ee_site_name).copy() - self.relative_origin
 
     def get_joint_positions(self):
-        positions = [self.sim.data.get_joint_qpos(
-            joint).copy() for joint in self.joints]
+        positions = [self.sim.data.get_joint_qpos(joint).copy() for joint in self.joints]
         return np.array(positions)
 
     def get_joint_velocities(self):
-        velocities = [self.sim.data.get_joint_qvel(
-            joint).copy() for joint in self.joints]
+        velocities = [self.sim.data.get_joint_qvel(joint).copy() for joint in self.joints]
         return np.array(velocities)
 
     def get_ee_velocity(self):
@@ -773,8 +827,7 @@ class ClothEnv_(object):
     def get_cloth_position_I(self):
         positions = dict()
         for site in self.cloth_site_names:
-            positions[site] = self.sim.data.get_site_xpos(
-                site).copy() - self.relative_origin
+            positions[site] = self.sim.data.get_site_xpos(site).copy() - self.relative_origin
         return positions
 
     def get_cloth_position_W(self):
@@ -789,8 +842,7 @@ class ClothEnv_(object):
             for j in range(9):
                 if (i in [0, 8]) or (j in [0, 8]):
                     site_name = f"S{i}_{j}"
-                    positions[site_name] = self.sim.data.get_site_xpos(
-                        site_name).copy()
+                    positions[site_name] = self.sim.data.get_site_xpos(site_name).copy()
         return positions
 
     def get_cloth_velocity(self):
@@ -800,26 +852,23 @@ class ClothEnv_(object):
         return velocities
 
     def get_image_obs(self):
-        camera_id = self.sim.model.camera_name2id(
-            self.train_camera)
-        width = self.randomization_kwargs['camera_config']['width']
-        height = self.randomization_kwargs['camera_config']['height']
+        camera_id = self.sim.model.camera_name2id(self.train_camera)
+        width = self.randomization_kwargs["camera_config"]["width"]
+        height = self.randomization_kwargs["camera_config"]["height"]
 
         self.viewer.render(width, height, camera_id)
-        image_obs = copy.deepcopy(
-            self.viewer.read_pixels(width, height, depth=False))
+        image_obs = copy.deepcopy(self.viewer.read_pixels(width, height, depth=False))
 
         image_obs = image_obs[::-1, :, :]
 
-        height_start = int(image_obs.shape[0]/2 - self.image_size[1]/2)
+        height_start = int(image_obs.shape[0] / 2 - self.image_size[1] / 2)
         height_end = height_start + self.image_size[1]
 
-        width_start = int(image_obs.shape[1]/2 - self.image_size[0]/2)
+        width_start = int(image_obs.shape[1] / 2 - self.image_size[0] / 2)
         width_end = width_start + self.image_size[0]
-        image_obs = image_obs[height_start:height_end,
-                              width_start:width_end, :]
+        image_obs = image_obs[height_start:height_end, width_start:width_end, :]
 
-        if self.randomization_kwargs['albumentations_randomization']:
+        if self.randomization_kwargs["albumentations_randomization"]:
             image_obs = cv2.cvtColor(image_obs, cv2.COLOR_BGR2RGB)
             image_obs = self.albumentations_transform(image=image_obs)["image"]
             image_obs = cv2.cvtColor(image_obs, cv2.COLOR_RGB2GRAY)
@@ -829,42 +878,41 @@ class ClothEnv_(object):
         return (image_obs / 255).flatten().copy()
 
     def get_obs(self):
-        achieved_goal_I = np.zeros(self.single_goal_dim*len(self.constraints))
+        achieved_goal_I = np.zeros(self.single_goal_dim * len(self.constraints))
         for i, constraint in enumerate(self.constraints):
-            origin = constraint['origin']
-            achieved_goal_I[i*self.single_goal_dim:(i+1)*self.single_goal_dim] = self.sim.data.get_site_xpos(
-                origin).copy() - self.relative_origin
+            origin = constraint["origin"]
+            achieved_goal_I[i * self.single_goal_dim : (i + 1) * self.single_goal_dim] = (
+                self.sim.data.get_site_xpos(origin).copy() - self.relative_origin
+            )
 
         cloth_position = np.array(list(self.get_cloth_position_I().values()))
-        cloth_velocity = np.array(list(self.get_cloth_velocity(
-        ).values()))
+        cloth_velocity = np.array(list(self.get_cloth_velocity().values()))
 
-        cloth_observation = np.concatenate(
-            [cloth_position.flatten(), cloth_velocity.flatten()])
+        cloth_observation = np.concatenate([cloth_position.flatten(), cloth_velocity.flatten()])
 
         desired_pos_ctrl_I = self.desired_pos_ctrl_W - self.relative_origin
 
         full_observation = {
-            'achieved_goal': achieved_goal_I.copy(), 'desired_goal': self.goal.copy()}
+            "achieved_goal": achieved_goal_I.copy(),
+            "desired_goal": self.goal.copy(),
+        }
 
         if self.robot_observation == "ee":
             robot_observation = np.concatenate(
-                [self.get_ee_position_I(), self.get_ee_velocity(), desired_pos_ctrl_I])
+                [self.get_ee_position_I(), self.get_ee_velocity(), desired_pos_ctrl_I]
+            )
         elif self.robot_observation == "ctrl":
-            robot_observation = np.concatenate(
-                [self.previous_raw_action, np.zeros(6)])
+            robot_observation = np.concatenate([self.previous_raw_action, np.zeros(6)])
         elif self.robot_observation == "none":
             robot_observation = np.zeros(9)
-        full_observation['image'] = np.array(
-            [image for image in self.frame_stack]).flatten()
+        full_observation["image"] = np.array([image for image in self.frame_stack]).flatten()
         if self.randomization_kwargs["dynamics_randomization"]:
-            full_observation['observation'] = np.concatenate(
-                [cloth_observation.copy(), np.array(self.mujoco_model_numerical_values)])
+            full_observation["observation"] = np.concatenate(
+                [cloth_observation.copy(), np.array(self.mujoco_model_numerical_values)]
+            )
         else:
-            full_observation['observation'] = cloth_observation.copy(
-            ).flatten()
-        full_observation['robot_observation'] = robot_observation.flatten(
-        ).copy()
+            full_observation["observation"] = cloth_observation.copy().flatten()
+        full_observation["robot_observation"] = robot_observation.flatten().copy()
 
         return full_observation
 
@@ -873,20 +921,20 @@ class ClothEnv_(object):
         return [seed]
 
     def sample_goal_I(self):
-        goal = np.zeros(self.single_goal_dim*len(self.constraints))
-        noise = self.np_random.uniform(self.goal_noise_range[0],
-                                       self.goal_noise_range[1])
+        goal = np.zeros(self.single_goal_dim * len(self.constraints))
+        noise = self.np_random.uniform(self.goal_noise_range[0], self.goal_noise_range[1])
 
         for i, constraint in enumerate(self.constraints):
-            target = constraint['target']
+            target = constraint["target"]
             target_pos = self.sim.data.get_site_xpos(target).copy()
             offset = np.zeros(self.single_goal_dim)
-            if 'noise_directions' in constraint.keys():
-                for idx, offset_dir in enumerate(constraint['noise_directions']):
-                    offset[idx] = offset_dir*noise
+            if "noise_directions" in constraint.keys():  # noqa: SIM118
+                for idx, offset_dir in enumerate(constraint["noise_directions"]):
+                    offset[idx] = offset_dir * noise
 
-            goal[i*self.single_goal_dim: (i+1) *
-                 self.single_goal_dim] = target_pos + offset - self.relative_origin
+            goal[i * self.single_goal_dim : (i + 1) * self.single_goal_dim] = (
+                target_pos + offset - self.relative_origin
+            )
 
         return goal.copy(), noise
 
@@ -901,7 +949,8 @@ class ClothEnv_(object):
 
     def setup_xml_model(self, randomize, rownum=None):
         model_kwargs, model_numerical_values = self.build_xml_kwargs_and_numerical_values(
-            randomize=randomize, rownum=rownum)
+            randomize=randomize, rownum=rownum
+        )
         self.mujoco_model_numerical_values = model_numerical_values
         self.setup_initial_state_and_sim(model_kwargs)
 
@@ -919,7 +968,7 @@ class ClothEnv_(object):
         self.relative_origin = self.get_ee_position_W()
         self.goal, self.goal_noise = self.sample_goal_I()
 
-        if not self.viewer is None:
+        if self.viewer is not None:
             del self.viewer._markers[:]
 
         self.episode_ee_close_steps = 0
@@ -932,10 +981,12 @@ class ClothEnv_(object):
                 "seed": int(getattr(self, "seed_val", 0)),
                 "physics_params": list(getattr(self, "mujoco_model_numerical_values", [])),
                 "randomization_kwargs": self.randomization_kwargs,
-                "delay_cfg": {"image_obs_noise_mean": self.image_obs_noise_mean,
-                              "image_obs_noise_std": self.image_obs_noise_std},
+                "delay_cfg": {
+                    "image_obs_noise_mean": self.image_obs_noise_mean,
+                    "image_obs_noise_std": self.image_obs_noise_std,
+                },
                 "horizon": 250,
-                "delta_success": float(self.success_distance)
+                "delta_success": float(self.success_distance),
             }
             self.logger.start_episode(meta)
 
@@ -958,20 +1009,20 @@ class ClothEnv_(object):
             corner_in_image = np.ones(4)
             corner_in_image[:3] = cloth_positions[site]
             corner = (camera_matrix @ camera_transformation) @ corner_in_image
-            u_c, v_c, _ = corner/corner[2]
-            corner = [w-u_c, v_c]
+            u_c, v_c, _ = corner / corner[2]
+            corner = [w - u_c, v_c]
             corners.append(corner)
         return corners
 
     def get_edge_image_positions(self, w, h, camera_matrix, camera_transformation):
         corners = []
         cloth_edge_positions = self.get_cloth_edge_positions_W()
-        for site in cloth_edge_positions.keys():
+        for site in cloth_edge_positions.keys():  # noqa: SIM118
             corner_in_image = np.ones(4)
             corner_in_image[:3] = cloth_edge_positions[site]
             corner = (camera_matrix @ camera_transformation) @ corner_in_image
-            u_c, v_c, _ = corner/corner[2]
-            corner = [w-u_c, v_c]
+            u_c, v_c, _ = corner / corner[2]
+            corner = [w - u_c, v_c]
             corners.append(corner)
         return corners
 
@@ -990,27 +1041,37 @@ class ClothEnv_(object):
 
         return camera_matrix, camera_transformation
 
-    def get_masked_image(self, camera, width, height, ee_in_image, aux_output, point_size, greyscale=False, mask_type=None):
-        camera_matrix, camera_transformation = self.get_camera_matrices(
-            camera, width, height)
+    def get_masked_image(
+        self,
+        camera,
+        width,
+        height,
+        ee_in_image,
+        aux_output,
+        point_size,
+        greyscale=False,
+        mask_type=None,
+    ):
+        camera_matrix, camera_transformation = self.get_camera_matrices(camera, width, height)
         camera_id = self.sim.model.camera_name2id(camera)
         self.viewer.render(width, height, camera_id)
-        data = np.float32(self.viewer.read_pixels(
-            width, height, depth=False)).copy()
+        data = np.float32(self.viewer.read_pixels(width, height, depth=False)).copy()
         data = np.float32(data[::-1, :, :]).copy()
         data = np.float32(data)
         if greyscale:
             data = cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
         ee = camera_matrix @ camera_transformation @ ee_in_image
-        u_ee, v_ee, _ = ee/ee[2]
+        u_ee, v_ee, _ = ee / ee[2]
         # cv2.circle(data, (width-int(u_ee), int(v_ee)), point_size, (0, 0, 0), -1)
 
         if mask_type == "corners":
             mask = self.get_corner_image_positions(
-                width, height, camera_matrix, camera_transformation)
+                width, height, camera_matrix, camera_transformation
+            )
         elif mask_type == "edges":
             mask = self.get_edge_image_positions(
-                width, height, camera_matrix, camera_transformation)
+                width, height, camera_matrix, camera_transformation
+            )
         else:
             mask = []
 
@@ -1019,10 +1080,10 @@ class ClothEnv_(object):
             v = int(point[1])
             cv2.circle(data, (u, v), point_size, (255, 0, 0), -1)
 
-        if not aux_output is None:
+        if aux_output is not None:
             for aux_idx in range(4):
-                aux_u = int(aux_output.flatten()[aux_idx*2]*width)
-                aux_v = int(aux_output.flatten()[aux_idx*2+1]*height)
+                aux_u = int(aux_output.flatten()[aux_idx * 2] * width)
+                aux_v = int(aux_output.flatten()[aux_idx * 2 + 1] * height)
                 cv2.circle(data, (aux_u, aux_v), point_size, (0, 255, 0), -1)
 
         return data
@@ -1031,29 +1092,62 @@ class ClothEnv_(object):
         w_eval, h_eval = 500, 500
         w_corners, h_corners = 500, 500
         w_cnn, h_cnn = self.image_size
-        w_cnn_full, h_cnn_full = self.randomization_kwargs['camera_config'][
-            'width'], self.randomization_kwargs['camera_config']['height']
+        w_cnn_full, h_cnn_full = (
+            self.randomization_kwargs["camera_config"]["width"],
+            self.randomization_kwargs["camera_config"]["height"],
+        )
 
         ee_in_image = np.ones(4)
         ee_pos = self.get_ee_position_W()
         ee_in_image[:3] = ee_pos
 
         corner_image = self.get_masked_image(
-            self.train_camera, w_corners, h_corners, ee_in_image, aux_output, 8, greyscale=False, mask_type=mask_type)
+            self.train_camera,
+            w_corners,
+            h_corners,
+            ee_in_image,
+            aux_output,
+            8,
+            greyscale=False,
+            mask_type=mask_type,
+        )
         eval_image = self.get_masked_image(
-            self.eval_camera, w_eval, h_eval, ee_in_image, None, 4, greyscale=False, mask_type=mask_type)
+            self.eval_camera,
+            w_eval,
+            h_eval,
+            ee_in_image,
+            None,
+            4,
+            greyscale=False,
+            mask_type=mask_type,
+        )
         cnn_color_image_full = self.get_masked_image(
-            self.train_camera, w_cnn_full, h_cnn_full, ee_in_image, aux_output, 2, mask_type=mask_type)
+            self.train_camera,
+            w_cnn_full,
+            h_cnn_full,
+            ee_in_image,
+            aux_output,
+            2,
+            mask_type=mask_type,
+        )
         cnn_color_image = self.get_masked_image(
-            self.train_camera, w_cnn, h_cnn, ee_in_image, aux_output, 2, mask_type=mask_type)
+            self.train_camera, w_cnn, h_cnn, ee_in_image, aux_output, 2, mask_type=mask_type
+        )
         cnn_image = self.get_masked_image(
-            self.train_camera, w_cnn, h_cnn, ee_in_image, aux_output, 2, greyscale=True, mask_type=mask_type)
+            self.train_camera,
+            w_cnn,
+            h_cnn,
+            ee_in_image,
+            aux_output,
+            2,
+            greyscale=True,
+            mask_type=mask_type,
+        )
 
         return corner_image, eval_image, cnn_color_image_full, cnn_color_image, cnn_image
 
 
 class ClothEnv(ClothEnv_, EzPickle):
     def __init__(self, **kwargs):
-        ClothEnv_.__init__(
-            self, **kwargs)
+        ClothEnv_.__init__(self, **kwargs)
         EzPickle.__init__(self)
