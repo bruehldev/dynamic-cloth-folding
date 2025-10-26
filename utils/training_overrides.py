@@ -6,7 +6,7 @@ def configure_headless_graphics():
     """
     Ensure headless MuJoCo (no GUI) uses EGL. Must be called BEFORE importing mujoco_py/ClothEnv.
     """
-    if os.getenv("PHYSICS", "bullet").lower() == "mujoco" and os.getenv("WITH_GUI", "0") != "1":
+    if os.getenv("PHYSICS").lower() == "mujoco" and os.getenv("WITH_GUI", "0") != "1":
         os.environ.setdefault("MUJOCO_GL", "egl")
         os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 

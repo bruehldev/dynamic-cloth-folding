@@ -347,7 +347,10 @@ def get_policy_kwargs(args):
 
 
 def get_variant(args):
-    title = args.title + "-run-" + str(args.run)
+    import datetime
+
+    time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    title = args.title + "-run-" + str(args.run) + "-timestamp-" + time
     save_folder = os.path.join(os.path.abspath("./"), "trainings", title)
 
     variant = get_general_kwargs(args, save_folder, title)

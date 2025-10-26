@@ -10,7 +10,6 @@ class Camera:
         self.image_size = image_size  # final policy size, e.g. (100, 100)
         self.randomization_kwargs = randomization_kwargs
         self.albumentations_transform = None
-        # Master DR switch (propagated from bullet_model_kwargs / NO_DR)
         self.enable_dr = self.randomization_kwargs["enable_dr"]
         # Cache camera config block for convenience
         self._cam_cfg = self.randomization_kwargs["camera_config"]
@@ -54,7 +53,6 @@ class Camera:
         # Pick camera type once per episode (support "all")
         cam_type = cfg["type"]
         if cam_type == "all":
-            # DR: random pick; NO_DR: pick a stable default matching the original implementation
             cam_type = np.random.choice(list(cfg["types"].keys())) if self.enable_dr else "default"
         # print(f"Camera type for this episode: {cam_type}")
         eye, up = self._get_eye_from_type(center, cam_type)

@@ -7,9 +7,9 @@ def maybe_randomize(wrapped_env, randomization_kwargs):
     """
     Apply MuJoCo randomization (robosuite wrapper) when available.
     Bullet handles DR internally via randomization_kwargs and is left untouched.
-    NO_DR=1 disables DR entirely on both backends.
+    DR=0 disables DR entirely on both backends.
     """
-    if os.getenv("NO_DR", "0") == "1":
+    if os.getenv("DR", "0") == "0":
         return wrapped_env
     backend = getattr(wrapped_env, "_backend_name", "").lower()
     if backend in {"bullet", "pybullet"} or not hasattr(wrapped_env, "sim"):

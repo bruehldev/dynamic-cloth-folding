@@ -191,14 +191,12 @@ def make_bullet_randomization_kwargs(
 ) -> Dict[str, Any]:
     """
     Build the Bullet DR config.
-    - enable_dr defaults to True, unless NO_DR=1.
     - Any keys in `overrides` are deep-merged into the defaults.
     """
     cfg = deepcopy(_DEFAULTS)
 
     if enable_dr is None:
-        # DR ON by default; turn off only if NO_DR=1
-        enable_dr = os.getenv("NO_DR", "0") == "0"
+        enable_dr = os.getenv("DR", "0") == "1"
 
     cfg["enable_dr"] = bool(enable_dr)
 
