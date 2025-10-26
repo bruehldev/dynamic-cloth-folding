@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ruff.lint]
+# Enable common, useful rule families + import sorting (I) + pyupgrade.
+select = ["E", "F", "I", "B", "SIM", "UP"]
+# Keep Black-compatible slice spacing, and STOP Optional[T] -> T | None rewrites.
+ignore = ["E203", "UP006", "UP007"]

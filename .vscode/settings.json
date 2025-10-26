@@ -1,4 +1,14 @@
 {
+  // ---- Python (VS Code editor behavior) ----
+  "[python]": {
     "editor.formatOnSave": true,
-    "editor.formatOnPaste": true
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit",
+      "source.organizeImports": "explicit"
+    }
+  },
+
+  "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
+  "ruff.importStrategy": "fromEnvironment",
 }
