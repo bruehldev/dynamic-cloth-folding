@@ -1,5 +1,7 @@
+# train.py:
 import copy
 import logging
+import os
 
 import gym
 import mujoco_py
@@ -16,24 +18,62 @@ from rlkit.torch.sac import policies as sac_policies
 from rlkit.torch.sac import sac
 
 from env import cloth_env
-from utils import general_utils
+from utils import bullet_utils, general_utils
+from utils.collectors import LenientKeyPathCollector
+from utils.training_config import TrainingConfig
+from utils.training_overrides import (
+    apply_training_env_overrides,
+    use_inprocess_collector,
+)
 
 torch.cuda.empty_cache()
 gym.logger.set_level(50)
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format="%(message)s")
 
+BACKEND = os.getenv("PHYSICS").lower()
 
-def experiment(variant):
-    eval_env = cloth_env.ClothEnv(
-        **variant["env_kwargs"], randomization_kwargs=variant["randomization_kwargs"]
+
+def experiment(variant: TrainingConfig):
+    variant = apply_training_env_overrides(variant)
+
+    if BACKEND == "mujoco":
+        eval_env = cloth_env.ClothEnv(
+            **variant["env_kwargs"], randomization_kwargs=variant["randomization_kwargs"]
+        )
+        randomized_eval_env = general_utils.get_randomized_env(
+            wrappers.NormalizedBoxEnv(eval_env),
+            randomization_kwargs=variant["randomization_kwargs"],
+        )
+        env_keys, env_dims = general_utils.get_keys_and_dims(variant, randomized_eval_env)
+
+    else:
+        from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
+        from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
+
+        variant["pybullet"] = copy.deepcopy(variant)
+        variant["pybullet"] = apply_training_env_overrides(variant)
+        variant["pybullet"]["policy_kwargs"]["input_channels"] = variant["pybullet"]["env_kwargs"][
+            "frame_stack_size"
+        ]
+        if os.getenv("WITH_GUI", "0") == "1":
+            variant["pybullet"]["env_kwargs"]["has_viewer"] = True
+
+        variant["pybullet"]["randomization_kwargs"] = make_bullet_randomization_kwargs()
+        eval_env = ClothEnv(
+            **variant["pybullet"]["env_kwargs"],
+            randomization_kwargs=variant["pybullet"]["randomization_kwargs"],
+        )
+        randomized_eval_env = eval_env
+        env_keys, env_dims = bullet_utils.get_keys_and_dims(
+            variant["pybullet"],
+            wrappers.NormalizedBoxEnv(eval_env),
+        )
+
+    logger.debug(
+        f"PHYSICS backend: {getattr(eval_env, '_backend_name', 'unknown')} | "
+        f"class: {type(eval_env).__name__}"
     )
-
-    randomized_eval_env = general_utils.get_randomized_env(
-        wrappers.NormalizedBoxEnv(eval_env), randomization_kwargs=variant["randomization_kwargs"]
-    )
-
-    env_keys, env_dims = general_utils.get_keys_and_dims(variant, randomized_eval_env)
 
     fc_width, fc_depth = (
         variant["value_function_kwargs"]["fc_layer_size"],
@@ -97,27 +137,46 @@ def experiment(variant):
     evaluation_suite = eval_suite.EvalTestSuite(tests=[success_test, real_corner_test])
 
     def make_worker_env_function():
-        return general_utils.get_randomized_env(
-            wrappers.NormalizedBoxEnv(
-                cloth_env.ClothEnv(
-                    **variant["env_kwargs"], randomization_kwargs=variant["randomization_kwargs"]
-                )
-            ),
-            randomization_kwargs=variant["randomization_kwargs"],
-        )
+        if BACKEND == "mujoco":
+            return general_utils.get_randomized_env(
+                wrappers.NormalizedBoxEnv(
+                    cloth_env.ClothEnv(
+                        **variant["env_kwargs"],
+                        randomization_kwargs=variant["randomization_kwargs"],
+                    )
+                ),
+                randomization_kwargs=variant["randomization_kwargs"],
+            )
+        else:
+            from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
+
+            return ClothEnv(
+                **variant["pybullet"]["env_kwargs"],
+                randomization_kwargs=variant["pybullet"]["randomization_kwargs"],
+            )
 
     env_functions = [
         make_worker_env_function for _ in range(variant["path_collector_kwargs"]["num_processes"])
     ]
     vec_env = wrappers.SubprocVecEnv(env_functions)
 
-    exploration_path_collector = data_collector.VectorizedKeyPathCollector(
-        vec_env,
-        policy,
-        observation_key=env_keys["path_collector_observation_key"],
-        desired_goal_key=env_keys["desired_goal_key"],
-        **variant["path_collector_kwargs"],
-    )
+    if use_inprocess_collector():
+        logger.debug("Using in-process data collector")
+        exploration_path_collector = LenientKeyPathCollector(
+            randomized_eval_env,
+            policy,
+            observation_key=env_keys["path_collector_observation_key"],
+            desired_goal_key=env_keys["desired_goal_key"],
+            **variant["path_collector_kwargs"],
+        )
+    else:
+        exploration_path_collector = data_collector.VectorizedKeyPathCollector(
+            vec_env,
+            policy,
+            observation_key=env_keys["path_collector_observation_key"],
+            desired_goal_key=env_keys["desired_goal_key"],
+            **variant["path_collector_kwargs"],
+        )
 
     replay_buffer = future_obs_dict_replay_buffer.FutureObsDictRelabelingBuffer(
         ob_spaces=copy.deepcopy(eval_env.observation_space.spaces),
@@ -151,7 +210,10 @@ def experiment(variant):
     )
     algorithm.to(pytorch_util.device)
 
-    with mujoco_py.ignore_mujoco_warnings():
+    if BACKEND == "mujoco":
+        with mujoco_py.ignore_mujoco_warnings():
+            algorithm.train()
+    else:
         algorithm.train()
 
     vec_env.close()

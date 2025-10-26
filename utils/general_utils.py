@@ -7,6 +7,7 @@ from git import Repo
 import json
 from rlkit.torch import pytorch_util
 import logging
+import datetime
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
@@ -356,7 +357,8 @@ def get_policy_kwargs(args):
 
 
 def get_variant(args):
-    title = args.title + "-run-" + str(args.run)
+    time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    title = args.title + "-run-" + str(args.run) + "-" + time
     save_folder = os.path.join(os.path.abspath("./"), "trainings", title)
 
     variant = get_general_kwargs(args, save_folder, title)
