@@ -119,6 +119,7 @@ class DeformableCloth:
         p.changeVisualShape(
             self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1.0]
         )
+        self._texture_id = None
 
         # keep original mesh path for MTL parsing / logging
         self.mesh_path = self.cloth_cfg["mesh_path"]
@@ -212,8 +213,14 @@ class DeformableCloth:
         p.createSoftBodyAnchor(self.cloth_id, vertex_index, robot_id, link_id, [0, 0, 0])
 
     def set_color(self, rgba):
-        self.color = list(map(float, rgba))  # cache for logging/obs if you want
-        p.changeVisualShape(self.cloth_id, -1, rgbaColor=self.color)
+        self.color = list(map(float, rgba))
+        # Preserve the current texture if one is applied
+        if getattr(self, "_texture_applied", False) and self._texture_id is not None:
+            p.changeVisualShape(
+                self.cloth_id, -1, textureUniqueId=int(self._texture_id), rgbaColor=self.color
+            )
+        else:
+            p.changeVisualShape(self.cloth_id, -1, rgbaColor=self.color)
 
     @staticmethod
     def _pick_random_texture(texture_dir):
@@ -357,8 +364,10 @@ class DeformableCloth:
                     _TEXTURE_ID_CACHE[_path_to_load] = tex_id
                 p.changeVisualShape(self.cloth_id, -1, textureUniqueId=tex_id)
                 self._texture_applied = True
+                self._texture_id = int(tex_id)
         except Exception:
             self._texture_applied = False
+            self._texture_id = None
 
         # Tint (materials_randomization) or white
         self._tint_applied = False

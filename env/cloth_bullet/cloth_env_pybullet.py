@@ -7,7 +7,7 @@ from typing import Any, Optional
 import gym
 import numpy as np
 import psutil
-from gym.utils import seeding
+from gym.utils import EzPickle, seeding
 
 from env.cloth_bullet.camera import Camera
 from env.cloth_bullet.deformable_cloth import DeformableCloth
@@ -271,9 +271,7 @@ class BulletClothEnv_:
         ):
             lo = np.array(cloth_cfg["color_lo"])
             hi = np.array(cloth_cfg["color_hi"])
-            p.changeVisualShape(
-                self.cloth.cloth_id, -1, rgbaColor=(self.np_random.uniform(lo, hi)).tolist()
-            )
+            self.cloth.set_color((self.np_random.uniform(lo, hi)).tolist())
 
         # Now show the fully initialized scene (single switch at the very end)
         try:
@@ -543,6 +541,9 @@ class BulletClothEnv_:
             "goal_noise": self.goal_noise,
         }
 
+    def close(self):
+        self.world.close()
+
 
 def _pick_random_texture(texture_dir):
     """Return a random image path from `texture_dir` or None if not available."""
@@ -565,7 +566,9 @@ def _pick_random_texture(texture_dir):
         return None
 
 
-class ClothEnvBullet(BulletClothEnv_):
-    """Public class to mirror ClothEnv signature."""
+class ClothEnvBullet(BulletClothEnv_, EzPickle):
+    """Public class to mirror ClothEnv signature and be EzPickle-compatible."""
 
-    pass
+    def __init__(self, **kwargs):
+        BulletClothEnv_.__init__(self, **kwargs)
+        EzPickle.__init__(self, **kwargs)
