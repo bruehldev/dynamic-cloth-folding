@@ -89,9 +89,9 @@ _DEFAULTS = {
         # physics-ish ranges used inside cloth_env_pybullet.py
         "scale_range": [0.10, 0.20],  # used when DR is ON
         "scale": 0.10,  # deterministic fallback used when DR is OFF
-        "scale_clearance_threshold": 0.26,
-        "friction_range": [1.5, 3.5],
-        "friction": 2.5,  # deterministic fallback if DR is OFF
+        "scale_clearance_threshold": 0.15,
+        "friction_range": [0.5, 1.5],
+        "friction": 1.0,  # deterministic fallback if DR is OFF
         "mass": 0.5,
         "base_clearance": 0.05,
         "extra_clearance_slope": 0.35,
@@ -100,22 +100,22 @@ _DEFAULTS = {
         "useNeoHookean": 0,
         "useBendingSprings": 1,
         "useMassSpring": 1,
-        "spring_k_range": [30.0, 80.0],
-        "spring_c_range": [0.05, 0.2],
-        "spring_k": 50.0,  # deterministic fallback if DR is OFF
+        "spring_k_range": [30.0, 60.0],
+        "spring_c_range": [0.08, 0.15],
+        "spring_k": 40.0,  # deterministic fallback if DR is OFF
         "spring_c": 0.1,  # deterministic fallback if DR is OFF
         "damping_all_dirs": 1,
         "useSelfCollision": 1,
         "useFaceContact": 1,
-        "collision_margin_range": [0.008, 0.015],
-        "collision_margin": 0.01,
+        "collision_margin_range": [0.003, 0.010],
+        "collision_margin": 0.006,
         "settle_steps": 60,
         "thickness": 0.002,
     },
     "table": {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
         "color_hi": [0.95, 0.90, 0.85, 1.0],
-        "lateral_friction_range": [1.0, 2.5],  # overrides base [0.5, 1.2]
+        "lateral_friction_range": [0.5, 1.5],  # overrides base [0.5, 1.2]
         "rolling_friction_range": [0.0005, 0.003],
         "spinning_friction_range": [0.0005, 0.003],
         "restitution_range": [0.0, 0.2],
@@ -176,13 +176,15 @@ _DEFAULTS = {
     # world-level physics randomization
     "dynamics_randomization": True,
     "physics": {
-        "erp_range": [0.15, 0.35],
-        "contact_erp_range": [0.15, 0.35],
-        "global_cfm_range": [0.0, 1e-3],
+        "erp_range": [0.20, 0.30],
+        "contact_erp_range": [0.20, 0.30],
+        "global_cfm_range": [1e-6, 1e-4],
         "solver_iters_range": [120, 200],
         "residual_thresh_range": [1e-6, 1e-4],
         "restitution_vel_thresh_range": [0.0, 0.5],
         "contact_breaking_threshold_range": [0.02, 0.08],
+        "sparseSdfVoxelSize": 0.10,
+        "sparse_sdf_voxel_size_range": [0.08, 0.12],
     },
     "gravity_randomization": True,
     "gravity_range": [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]],
@@ -193,7 +195,7 @@ _DEFAULTS = {
     "image_size": 100,
     "frame_stack_size": 4,
     "control_frequency": 10.0,
-    "timestep": 0.01,
+    "timestep": 0.005,
     "output_max": 0.03,
     "robot_observation": "ctrl",
     "max_close_steps": 10,

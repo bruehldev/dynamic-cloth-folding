@@ -155,7 +155,9 @@ class PyBulletWorld:
             "contactBreakingThreshold": float(
                 np.random.uniform(*phys["contact_breaking_threshold_range"])
             ),
+            "sparseSdfVoxelSize": float(np.random.uniform(*phys["sparse_sdf_voxel_size_range"])),
         }
+
         for k, v in params.items():
             try:
                 p.setPhysicsEngineParameter(**{k: v})

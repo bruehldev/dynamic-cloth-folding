@@ -13,19 +13,7 @@ from env.cloth_bullet.camera import Camera
 from env.cloth_bullet.deformable_cloth import DeformableCloth
 from env.cloth_bullet.folding_task import FoldingTask
 from env.cloth_bullet.panda_robot import PandaRobot
-
-# Refactored components
 from env.cloth_bullet.pybullet_world import PyBulletWorld
-
-# NOTE: Do not import mujoco_model_kwargs here.
-# Bullet appearance comes solely from randomization_kwargs passed in.
-
-
-# optional logging
-try:
-    from df_logging import RunLogger
-except Exception:
-    RunLogger = None
 
 try:
     import pybullet as p
@@ -546,27 +534,6 @@ class BulletClothEnv_:
 
     def close(self):
         self.world.close()
-
-
-def _pick_random_texture(texture_dir):
-    """Return a random image path from `texture_dir` or None if not available."""
-    try:
-        import os
-        import random
-
-        if not os.path.isdir(texture_dir):
-            return None
-        exts = {".png", ".jpg", ".jpeg"}
-        candidates = [
-            os.path.join(texture_dir, f)
-            for f in os.listdir(texture_dir)
-            if os.path.splitext(f)[1].lower() in exts
-        ]
-        if not candidates:
-            return None
-        return random.choice(candidates)
-    except Exception:
-        return None
 
 
 class ClothEnvBullet(BulletClothEnv_, EzPickle):
