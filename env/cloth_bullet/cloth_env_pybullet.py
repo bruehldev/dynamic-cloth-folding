@@ -312,24 +312,6 @@ class BulletClothEnv_:
             desired_pos_step_W, self.min_absolute_W, self.max_absolute_W
         )
 
-        # --- Lift-then-fold arc motion ---
-        robot_cfg = self.kwargs["robot"]
-        arc_cfg = robot_cfg["lift_fold_arc"]
-        if arc_cfg["enabled"]:
-            table_z = self.world.get_table_top_z()
-            # t increases as the gripper moves away from its starting XY position
-            xy_travel_dist = arc_cfg["xy_travel_dist"]
-            t = np.clip(
-                np.linalg.norm(self.desired_pos_step_W[:2] - self.relative_origin[:2])
-                / xy_travel_dist,
-                0.0,
-                1.0,
-            )
-            z_start = table_z + arc_cfg["z_start_offset"]  # Initial height close to the table
-            z_end = table_z + arc_cfg["z_end_offset"]  # Peak height of the arc
-            self.desired_pos_step_W[2] = (1 - t) * z_start + t * z_end
-        # --- End of arc motion logic ---
-
         for i in range(self.substeps):
             alpha = (i + 1) / self.substeps
             self.desired_pos_ctrl_W = (
