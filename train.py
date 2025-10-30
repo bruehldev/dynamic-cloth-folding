@@ -52,7 +52,7 @@ def experiment(variant: TrainingConfig):
         from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
 
         variant["pybullet"] = copy.deepcopy(variant)
-        variant["pybullet"] = apply_training_env_overrides(variant)
+        variant["pybullet"] = apply_training_env_overrides(variant["pybullet"])
         variant["pybullet"]["policy_kwargs"]["input_channels"] = variant["pybullet"]["env_kwargs"][
             "frame_stack_size"
         ]

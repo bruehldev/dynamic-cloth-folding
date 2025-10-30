@@ -1,4 +1,6 @@
 # pybullet_world.py
+import contextlib
+
 import numpy as np
 import pybullet as p
 import pybullet_data
@@ -184,3 +186,7 @@ class PyBulletWorld:
                 p.changeVisualShape(self.plane_id, -1, rgbaColor=plane_rgba)
         except Exception:
             pass
+
+    def close(self):
+        with contextlib.suppress(Exception):
+            p.disconnect(self.client_id)
