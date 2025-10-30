@@ -7,9 +7,10 @@ import pybullet_data
 
 
 class PyBulletWorld:
-    def __init__(self, has_viewer, timestep):
+    def __init__(self, has_viewer, timestep, cfg=None):
         self.has_viewer = has_viewer
         self.timestep = timestep
+        self.cfg = cfg
         self.client_id = p.connect(p.GUI if self.has_viewer else p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
@@ -17,13 +18,15 @@ class PyBulletWorld:
         self.plane_id = None
         self._table_z = 0.0
 
-        # --- NEW: episode physics cache (defaults) ---
-        self.gravity_vec = np.array([0.0, 0.0, -9.81], dtype=float)
+        gvec = np.array(self.cfg["gravity"], dtype=float)
+        self.gravity_vec = gvec
         self.gravity = float(self.gravity_vec[2])  # used by get_obs
-        self.table_lateral_friction = 0.8
-        self.table_restitution = 0.1
-        self.table_rolling_friction = 0.001
-        self.table_spinning_friction = 0.001
+        # world default table dynamics (deterministic fallback, can be overwritten by DR)
+        wdefs = self.cfg["world"]["defaults"]
+        self.table_lateral_friction = float(wdefs["table_lateral_friction"])
+        self.table_restitution = float(wdefs["table_restitution"])
+        self.table_rolling_friction = float(wdefs["table_rolling_friction"])
+        self.table_spinning_friction = float(wdefs["table_spinning_friction"])
 
     def reset(self):
         p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
@@ -33,14 +36,17 @@ class PyBulletWorld:
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
 
         # Load plane
-        self.plane_id = p.loadURDF("plane.urdf")
+        plane_urdf = self.cfg["world"]["plane_urdf"]
+        self.plane_id = p.loadURDF(plane_urdf)
 
         # Load table as a box
-        table_half_extents = [0.3, 0.3, 0.13]  # matches MJ <geom size="0.3 0.3 0.13">
-        table_pos = [0.4, 0.0, 0.0033164]  # so top = 0.0033164 + 0.13 ≈ 0.1333164
+        wtab = self.cfg["world"]["table"]
+        table_half_extents = list(map(float, wtab["half_extents"]))
+        table_pos = list(map(float, wtab["base_position"]))
+        table_rgba = list(map(float, wtab["visual_rgba"]))
         box_collision_shape_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=table_half_extents)
         box_visual_shape_id = p.createVisualShape(
-            p.GEOM_BOX, halfExtents=table_half_extents, rgbaColor=[0.8, 0.8, 0.8, 1]
+            p.GEOM_BOX, halfExtents=table_half_extents, rgbaColor=table_rgba
         )
         self.table_id = p.createMultiBody(
             baseMass=0,

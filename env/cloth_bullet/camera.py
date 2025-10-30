@@ -91,7 +91,9 @@ class Camera:
         # Match projection to the render buffer to avoid stretching
         aspect = self.render_size[0] / self.render_size[1]
         view_matrix = p.computeViewMatrix(eye.tolist(), center_w.tolist(), up)
-        proj_matrix = p.computeProjectionMatrixFOV(fov, aspect, 0.01, 5.0)
+        near = float(self._cam_cfg["near_clip"])
+        far = float(self._cam_cfg["far_clip"])
+        proj_matrix = p.computeProjectionMatrixFOV(fov, aspect, near, far)
         return view_matrix, proj_matrix
 
     def capture_image(self, center_w):

@@ -90,7 +90,7 @@ class BulletClothEnv_:
         # Define action space before reset is called
         self.action_space = gym.spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
-        self.world = PyBulletWorld(self.has_viewer, self.timestep)
+        self.world = PyBulletWorld(self.has_viewer, self.timestep, self.kwargs)
         self.camera = Camera(self.image_size, self.kwargs)
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
 
@@ -151,7 +151,9 @@ class BulletClothEnv_:
         robot_cfg = self.kwargs["robot"]
         base_pos = robot_cfg["base_pos"]
         base_orn = p.getQuaternionFromEuler(robot_cfg["base_orn_euler"])
-        self.robot = PandaRobot(base_position=base_pos, base_orientation=base_orn)
+        self.robot = PandaRobot(
+            base_position=base_pos, base_orientation=base_orn, robot_cfg=robot_cfg
+        )
         # Robot dynamics DR (only if master switch is ON)
         if self.enable_dr and self.kwargs.get("dynamics_randomization", True):
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
@@ -276,10 +278,11 @@ class BulletClothEnv_:
         # Now show the fully initialized scene (single switch at the very end)
         try:
             if self.has_viewer:
+                vcam = self.kwargs["viewer_debug_camera"]
                 p.resetDebugVisualizerCamera(
-                    cameraDistance=1.2,
-                    cameraYaw=30,
-                    cameraPitch=-30,
+                    cameraDistance=float(vcam["distance"]),
+                    cameraYaw=float(vcam["yaw"]),
+                    cameraPitch=float(vcam["pitch"]),
                     cameraTargetPosition=self._camera_target,
                 )
             # Turn rendering back on…

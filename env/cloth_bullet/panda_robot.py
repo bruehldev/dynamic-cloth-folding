@@ -8,16 +8,17 @@ class PandaRobot:
     joint/link identification, control, and sensor feedback.
     """
 
-    def __init__(self, base_position, base_orientation):
-        self.urdf_path = "franka_panda/panda.urdf"
+    def __init__(self, base_position, base_orientation, robot_cfg=None):
+        self.urdf_path = robot_cfg["urdf_path"]
         self.robot_id = p.loadURDF(
             self.urdf_path, base_position, base_orientation, useFixedBase=True
         )
 
         self._find_links_and_joints()
         self._get_joint_limits()
-        self._setup_finger_control()
-        self.set_initial_joint_positions()
+        self._setup_finger_control(robot_cfg["finger"])
+        self._setup_ik_params(robot_cfg["ik"])
+        self.set_initial_joint_positions(robot_cfg["init_joint_positions"])
         self.weld_fingers_shut()
 
     def _find_links_and_joints(self):
@@ -77,14 +78,18 @@ class PandaRobot:
             # Simple midpoint rest pose
             self.joint_rest_poses.append((info[8] + info[9]) / 2)
 
-    def _setup_finger_control(self):
+    def _setup_finger_control(self, finger_cfg=None):
         """
         Sets up motor control for the robot's fingers and welds them shut.
         """
-        self.finger_closed_pos = 0.0
-        self.finger_max_force = 200.0  # Default strong force
-        self.finger_kp = 1.0  # Default position gain
-        self.finger_max_vel = 2.0  # Default max velocity
+        self.finger_closed_pos = float(finger_cfg["closed_pos"])
+        self.finger_max_force = float(finger_cfg["max_force"])
+        self.finger_kp = float(finger_cfg["kp"])
+        self.finger_max_vel = float(finger_cfg["max_vel"])
+
+    def _setup_ik_params(self, ik_cfg=None):
+        self.ik_max_iters = int(ik_cfg["max_iters"])
+        self.ik_residual_threshold = float(ik_cfg["residual_threshold"])
 
     def weld_fingers_shut(self):
         """Creates fixed constraints to weld the fingers to the hand, ensuring a rigid grip."""
@@ -162,8 +167,8 @@ class PandaRobot:
             upperLimits=self.joint_limits_upper,
             jointRanges=self.joint_ranges,
             restPoses=self.joint_rest_poses,
-            maxNumIterations=100,
-            residualThreshold=1e-5,
+            maxNumIterations=self.ik_max_iters,
+            residualThreshold=self.ik_residual_threshold,
         )
 
     def apply_joint_positions(self, joint_positions):
@@ -219,10 +224,8 @@ class PandaRobot:
                     lateralFriction=float(lateral_friction),
                 )
 
-    def set_initial_joint_positions(self):
-        initial_qpos = np.array(
-            [0.212422, 0.362907, -0.00733391, -1.9649, -0.0198034, 2.37451, -1.50499]
-        )
+    def set_initial_joint_positions(self, initial_qpos=None):
+        initial_qpos = np.array(initial_qpos)
         # Apply it
         for i, j in enumerate(self.arm_joint_indices[: len(initial_qpos)]):
             p.resetJointState(self.robot_id, j, float(initial_qpos[i]), 0.0)

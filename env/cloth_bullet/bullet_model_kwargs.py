@@ -35,6 +35,8 @@ _DEFAULTS = {
         "type": "all",  # one of: default, side, front, up, all
         "train_camera_fovy": 60.0,
         "fovy_range": [55.0, 65.0],
+        "near_clip": 0.01,
+        "far_clip": 5.0,
         "jitter_xyz": [0.01, 0.01, 0.01],
         "target_lookat_pos": [0.49476399, 0.00668401, 0.13310541],
         "types": {
@@ -48,6 +50,8 @@ _DEFAULTS = {
             "full": {"eye": [1.022, -0.897, 0.739], "up": [0.0, 0.0, 1.0]},
         },
     },
+    # default debug viewer camera (used only when has_viewer=True)
+    "viewer_debug_camera": {"distance": 1.2, "yaw": 30.0, "pitch": -30.0},
     # lighting randomization
     "lights_randomization": True,
     "lights": {
@@ -58,7 +62,7 @@ _DEFAULTS = {
         "color_range": [[0.6, 0.6, 0.6], [1.0, 1.0, 1.0]],
     },
     # geometry sizing (global fallback used by cloth if cloth.scale_range is missing)
-    "cloth_size_range": [0.20, 0.33],  # DEPRECATED: use cloth.scale_range
+    "cloth_size_range": [0.10, 0.2],  # DEPRECATED: use cloth.scale_range
     "cloth_size": 0.26,  # DEPRECATED: use cloth.scale
     "mujoco_size_lock": True,  # keep Bullet cloth visually consistent with MuJoCo cloth_size
     # per-object sections
@@ -80,9 +84,11 @@ _DEFAULTS = {
         "preprocess_textures": True,
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
+        # visible color when the cloth first spawns (before texture/tint DR)
+        "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
-        "scale_range": [0.20, 0.33],  # used when DR is ON
-        "scale": 0.26,  # deterministic fallback used when DR is OFF
+        "scale_range": [0.10, 0.20],  # used when DR is ON
+        "scale": 0.20,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.26,
         "friction_range": [1.5, 3.5],
         "friction": 2.5,  # deterministic fallback if DR is OFF
@@ -117,6 +123,23 @@ _DEFAULTS = {
         "color_lo": [0.25, 0.25, 0.25, 1.0],
         "color_hi": [0.85, 0.85, 0.85, 1.0],
     },
+    # world/static geometry & defaults (deterministic fallbacks)
+    "world": {
+        "plane_urdf": "plane.urdf",
+        "table": {
+            # matches MJ <geom size="0.3 0.3 0.13">; used to compute top Z
+            "half_extents": [0.3, 0.3, 0.13],
+            # so top = 0.0033164 + 0.13 ≈ 0.1333164
+            "base_position": [0.4, 0.0, 0.0033164],
+            "visual_rgba": [0.8, 0.8, 0.8, 1.0],
+        },
+        "defaults": {
+            "table_lateral_friction": 0.8,
+            "table_rolling_friction": 0.001,
+            "table_spinning_friction": 0.001,
+            "table_restitution": 0.1,
+        },
+    },
     "robot": {
         # used by cloth_env_pybullet.reset() when DR master is on
         "lin_damping_range": [0.0, 0.2],
@@ -129,6 +152,19 @@ _DEFAULTS = {
         "workspace_limits_max": [0.35, 0.35, 0.4],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
+        # NEW: Panda specifics
+        "urdf_path": "franka_panda/panda.urdf",
+        "init_joint_positions": [
+            0.212422,
+            0.362907,
+            -0.00733391,
+            -1.9649,
+            -0.0198034,
+            2.37451,
+            -1.50499,
+        ],
+        "finger": {"closed_pos": 0.0, "max_force": 200.0, "kp": 1.0, "max_vel": 2.0},
+        "ik": {"max_iters": 100, "residual_threshold": 1e-5},
         "lift_fold_arc": {
             "enabled": True,
             "xy_travel_dist": 0.25,
@@ -205,6 +241,8 @@ def make_bullet_randomization_kwargs(
     assert "cloth" in cfg
     assert "camera_config" in cfg
     assert "folding_task" in cfg
+    assert "world" in cfg  # static geometry defaults
+    assert "viewer_debug_camera" in cfg
     assert "workspace_limits_min" in cfg["robot"]
     assert "workspace_limits_max" in cfg["robot"]
     assert "base_pos" in cfg["robot"]

@@ -116,8 +116,9 @@ class DeformableCloth:
             used_scale = float(desired_scale)
 
         # Visible spawn (rendering is still OFF due to the guard; env re-enables later)
+        spawn_rgba = self.cloth_cfg["spawn_color_rgba"]
         p.changeVisualShape(
-            self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=[0.4, 0.6, 1.0, 1.0]
+            self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=spawn_rgba
         )
         self._texture_id = None
 

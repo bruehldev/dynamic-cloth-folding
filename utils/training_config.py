@@ -181,8 +181,6 @@ class RandomizationKwargs(TypedDict, total=False):
     lights_randomization: bool
     lights: LightsConfig
 
-    # legacy / canonical cloth sizing (sometimes both present)
-    cloth_size_range: Vec2
     cloth_size: float
     mujoco_size_lock: bool
 
