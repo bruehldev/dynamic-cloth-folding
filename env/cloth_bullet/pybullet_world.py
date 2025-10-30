@@ -90,37 +90,26 @@ class PyBulletWorld:
             p.changeVisualShape(self.plane_id, -1, rgbaColor=list(map(float, rgba)))
 
     def apply_domain_randomization(self, dr):
-        # allow None
-        dr = dr or {}
+        # Strict: require dict with required sections
+        if dr is None:
+            raise KeyError("randomization kwargs must be provided")
         if self.plane_id is None or self.table_id is None:
             return
 
         # ---- Table color + dynamics ----
-        tab = dr.get("table", {})
+        tab = dr["table"]
         if tab:
-            lo = np.array(tab.get("color_lo", [0.8, 0.8, 0.8, 1.0]), dtype=float)
-            hi = np.array(tab.get("color_hi", [1.0, 1.0, 1.0, 1.0]), dtype=float)
+            lo = np.array(tab["color_lo"], dtype=float)
+            hi = np.array(tab["color_hi"], dtype=float)
             rgba = np.random.uniform(lo, hi).tolist()
             p.changeVisualShape(self.table_id, -1, rgbaColor=rgba)
 
-            lat_lo, lat_hi = tab.get(
-                "lateral_friction_range", [self.table_lateral_friction, self.table_lateral_friction]
-            )
-            res_lo, res_hi = tab.get(
-                "restitution_range", [self.table_restitution, self.table_restitution]
-            )
+            lat_lo, lat_hi = tab["lateral_friction_range"]
+            res_lo, res_hi = tab["restitution_range"]
             self.table_lateral_friction = float(np.random.uniform(lat_lo, lat_hi))
             self.table_restitution = float(np.random.uniform(res_lo, res_hi))
-            self.table_rolling_friction = float(
-                np.random.uniform(
-                    *tab.get("rolling_friction_range", [self.table_rolling_friction] * 2)
-                )
-            )
-            self.table_spinning_friction = float(
-                np.random.uniform(
-                    *tab.get("spinning_friction_range", [self.table_spinning_friction] * 2)
-                )
-            )
+            self.table_rolling_friction = float(np.random.uniform(*tab["rolling_friction_range"]))
+            self.table_spinning_friction = float(np.random.uniform(*tab["spinning_friction_range"]))
             p.changeDynamics(
                 self.table_id,
                 -1,
@@ -131,17 +120,16 @@ class PyBulletWorld:
             )
 
         # ---- Floor color (optional) ----
-        flo = dr.get("floor", {})
+        flo = dr["floor"]
         if flo:
-            lo = np.array(flo.get("color_lo", [0.2, 0.2, 0.2, 1.0]), dtype=float)
-            hi = np.array(flo.get("color_hi", [0.9, 0.9, 0.9, 1.0]), dtype=float)
+            lo = np.array(flo["color_lo"], dtype=float)
+            hi = np.array(flo["color_hi"], dtype=float)
             rgba = np.random.uniform(lo, hi).tolist()
             p.changeVisualShape(self.plane_id, -1, rgbaColor=rgba)
 
         # ---- Gravity DR (vector) ----
-        if dr.get("gravity_randomization", False):
-            # Expect a 2x3 range for vector sampling; fall back to default -9.81 z
-            g_range = dr.get("gravity_range", [[0.0, 0.0, -9.81], [0.0, 0.0, -9.81]])
+        if dr["gravity_randomization"]:
+            g_range = dr["gravity_range"]
             g0 = np.array(g_range[0], dtype=float)
             g1 = np.array(g_range[1], dtype=float)
             # elementwise uniform sample between the two vectors
@@ -154,24 +142,18 @@ class PyBulletWorld:
 
         # --- Physics / solver knobs (MuJoCo solref/solimp analogs) ---
         # Be defensive: different pybullet builds expose different parameter names.
-        phys = dr.get("physics", {})
+        phys = dr["physics"]
         params = {
-            # widely supported
-            "erp": float(np.random.uniform(*phys.get("erp_range", [0.1, 0.4]))),
-            "contactERP": float(np.random.uniform(*phys.get("contact_erp_range", [0.1, 0.4]))),
-            "numSolverIterations": int(
-                np.random.uniform(*phys.get("solver_iters_range", [120, 200]))
-            ),
-            # often available (best-effort; safe to ignore if missing)
-            "globalCFM": float(np.random.uniform(*phys.get("global_cfm_range", [0.0, 1e-3]))),
-            "solverResidualThreshold": float(
-                np.random.uniform(*phys.get("residual_thresh_range", [1e-7, 1e-3]))
-            ),
+            "erp": float(np.random.uniform(*phys["erp_range"])),
+            "contactERP": float(np.random.uniform(*phys["contact_erp_range"])),
+            "numSolverIterations": int(np.random.uniform(*phys["solver_iters_range"])),
+            "globalCFM": float(np.random.uniform(*phys["global_cfm_range"])),
+            "solverResidualThreshold": float(np.random.uniform(*phys["residual_thresh_range"])),
             "restitutionVelocityThreshold": float(
-                np.random.uniform(*phys.get("restitution_vel_thresh_range", [0.0, 1.0]))
+                np.random.uniform(*phys["restitution_vel_thresh_range"])
             ),
             "contactBreakingThreshold": float(
-                np.random.uniform(*phys.get("contact_breaking_threshold_range", [0.01, 0.1]))
+                np.random.uniform(*phys["contact_breaking_threshold_range"])
             ),
         }
         for k, v in params.items():

@@ -240,6 +240,7 @@ def make_bullet_randomization_kwargs(
     assert "robot" in cfg
     assert "cloth" in cfg
     assert "camera_config" in cfg
+    assert "render_size" in cfg
     assert "folding_task" in cfg
     assert "world" in cfg  # static geometry defaults
     assert "viewer_debug_camera" in cfg
@@ -270,6 +271,12 @@ def make_bullet_randomization_kwargs(
     assert "collision_margin_range" in cfg["cloth"]
     assert "collision_margin" in cfg["cloth"]
     assert "mesh_path" in cfg["cloth"]
+    assert "type" in cfg["camera_config"]
+    assert "train_camera_fovy" in cfg["camera_config"]
+    assert "fovy_range" in cfg["camera_config"]
+    assert "near_clip" in cfg["camera_config"]
+    assert "far_clip" in cfg["camera_config"]
+    assert "jitter_xyz" in cfg["camera_config"]
     assert "target_lookat_pos" in cfg["camera_config"]
     assert "types" in cfg["camera_config"]
     assert "default" in cfg["camera_config"]["types"]
@@ -279,6 +286,9 @@ def make_bullet_randomization_kwargs(
     assert "lights" in cfg
     assert "direction_range" in cfg["lights"]
     assert "color_range" in cfg["lights"]
+    assert "direction" in cfg["lights"]
+    assert "color" in cfg["lights"]
+    assert "shadows" in cfg["lights"]
     assert "lift_fold_arc" in cfg["robot"]
     assert "enabled" in cfg["robot"]["lift_fold_arc"]
     assert "xy_travel_dist" in cfg["robot"]["lift_fold_arc"]
@@ -296,5 +306,37 @@ def make_bullet_randomization_kwargs(
     assert "Blur" in cfg["albumentations_config"]
     assert "ColorJitter" in cfg["albumentations_config"]
     assert "GaussianBlur" in cfg["albumentations_config"]
+
+    # appearance / UV preprocessing
+    assert "preprocess_textures" in cfg["cloth"]
+    assert "uv" in cfg["cloth"]
+    for k in (
+        "repeat",
+        "rotate_deg",
+        "offset_frac",
+        "repeat_x_range",
+        "repeat_y_range",
+        "rotate_deg_range",
+        "offset_frac_range",
+    ):
+        assert k in cfg["cloth"]["uv"]
+
+    # world sections used by DR
+    assert "world" in cfg
+    assert "table" in cfg["world"]
+    for k in (
+        "color_lo",
+        "color_hi",
+        "lateral_friction_range",
+        "rolling_friction_range",
+        "spinning_friction_range",
+        "restitution_range",
+    ):
+        assert (
+            k in cfg["table"] if "table" in cfg else True
+        )  # flat alias if you keep table at top-level too
+    assert "floor" in cfg
+    for k in ("color_lo", "color_hi"):
+        assert k in cfg["floor"]
 
     return _deep_merge(cfg, overrides or {})

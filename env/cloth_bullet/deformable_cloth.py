@@ -273,9 +273,10 @@ class DeformableCloth:
         """Apply texture (random if DR) and optional DR tint to this cloth.
         Uses BULLET_DR via `randomization_kwargs['enable_dr']` (set in train.py).
         """
-        rk = randomization_kwargs or {}
-        enable_dr = bool(rk.get("enable_dr", True))
-        cloth_cfg = dict(rk.get("cloth", {}))
+        # Strict: require all values in kwargs; KeyError if missing
+        rk = randomization_kwargs
+        enable_dr = bool(rk["enable_dr"])
+        cloth_cfg = rk["cloth"]
 
         # paths from config
         template_dir = cloth_cfg["texture_dir"]
@@ -285,7 +286,8 @@ class DeformableCloth:
         fixed_path = self._mtl_map_kd() or fixed_path
 
         tex_path = None
-        if enable_dr and cloth_cfg.get("materials_randomization", True):
+        # Use the top-level materials_randomization
+        if enable_dr and rk["materials_randomization"]:
             tex_path = self._pick_random_texture(template_dir)
 
         if not tex_path:
@@ -296,28 +298,28 @@ class DeformableCloth:
         try:
             if tex_path and os.path.isfile(tex_path):
                 # ---- UV parameters (preprocess only if requested) ----
-                preprocess = bool(cloth_cfg.get("preprocess_textures", False))
-                uv_cfg = dict(cloth_cfg.get("uv", {}))
+                preprocess = bool(cloth_cfg["preprocess_textures"])
+                uv_cfg = cloth_cfg["uv"]
                 # defaults + DR ranges
                 if preprocess:
+                    # Strict: either provide repeat directly, or (if None) the *_range keys MUST exist
                     rep = uv_cfg.get("repeat")
-                    if rep is None and enable_dr:
-                        rep = [
-                            int(np.random.uniform(*uv_cfg.get("repeat_x_range", [2, 5]))),
-                            int(np.random.uniform(*uv_cfg.get("repeat_y_range", [2, 5]))),
-                        ]
-                    elif rep is None:
-                        rep = [1, 1]
+                    if rep is None:
+                        rx0, rx1 = uv_cfg["repeat_x_range"]
+                        ry0, ry1 = uv_cfg["repeat_y_range"]
+                        rep = [int(np.random.uniform(rx0, rx1)), int(np.random.uniform(ry0, ry1))]
                     rep = [max(1, min(4, int(rep[0]))), max(1, min(4, int(rep[1])))]  # clamp
-                    rot_deg = float(uv_cfg.get("rotate_deg", 0.0))
                     if enable_dr and "rotate_deg_range" in uv_cfg:
                         lo, hi = uv_cfg["rotate_deg_range"]
                         rot_deg = float(np.random.uniform(float(lo), float(hi)))
-                    off = uv_cfg.get("offset_frac", [0.0, 0.0])
+                    else:
+                        rot_deg = float(uv_cfg["rotate_deg"])
                     if enable_dr and "offset_frac_range" in uv_cfg:
                         ox = np.random.uniform(*uv_cfg["offset_frac_range"][0])
                         oy = np.random.uniform(*uv_cfg["offset_frac_range"][1])
                         off = [float(ox), float(oy)]
+                    else:
+                        off = uv_cfg["offset_frac"]
                 else:
                     # Fast path: no image processing, reuse raw file
                     rep = [1, 1]
