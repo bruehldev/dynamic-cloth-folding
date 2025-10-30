@@ -201,28 +201,20 @@ class PandaRobot:
 
     def randomize_dynamics(self, linear_damp: float, angular_damp: float, lateral_friction: float):
         """
-        Apply simple per-link damping and contact friction to approximate MuJoCo
-        dynamics randomization for the manipulator.
+        Apply per-link dynamics for the arm and gripper. Values are scalars.
         """
-        # Arm links
-        for j in self.arm_joint_indices:
-            p.changeDynamics(
-                self.robot_id,
-                j,
-                linearDamping=float(linear_damp),
-                angularDamping=float(angular_damp),
-                lateralFriction=float(lateral_friction),
-            )
-        # Hand/EE (if present)
-        for maybe in [self.hand_link_index, self.ee_link_index]:
-            if maybe is not None and maybe >= 0:
+        for link_id in self.arm_joint_indices + [self.ee_link_index]:
+            if link_id is not None and link_id >= 0:
                 p.changeDynamics(
                     self.robot_id,
-                    int(maybe),
+                    link_id,
                     linearDamping=float(linear_damp),
                     angularDamping=float(angular_damp),
                     lateralFriction=float(lateral_friction),
                 )
+        # expose for observations (fail loudly if missing)
+        self.joint_damping = [float(linear_damp)] * len(self.arm_joint_indices)
+        self.joint_friction = [float(lateral_friction)] * len(self.arm_joint_indices)
 
     def set_initial_joint_positions(self, initial_qpos=None):
         initial_qpos = np.array(initial_qpos)

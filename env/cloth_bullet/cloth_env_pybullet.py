@@ -446,12 +446,12 @@ class BulletClothEnv_:
         # --- Physics DR scalars (MuJoCo parity) ---
         physics_params = []
         if self.enable_dr and self.kwargs["dynamics_randomization"]:
-            # safe fallbacks if something wasn't randomized this episode
-            g = float(getattr(self.world, "gravity", -9.81))
-            tab_mu = float(getattr(self.world, "table_lateral_friction", 0.8))
-            tab_e = float(getattr(self.world, "table_restitution", 0.1))
-            jd = float(np.mean(getattr(self.robot, "joint_damping", [0.1])))
-            jf = float(np.mean(getattr(self.robot, "joint_friction", [0.8])))
+            # strict: these must be set during reset()/DR
+            g = float(self.world.gravity)
+            tab_mu = float(self.world.table_lateral_friction)
+            tab_e = float(self.world.table_restitution)
+            jd = float(np.mean(self.robot.joint_damping))
+            jf = float(np.mean(self.robot.joint_friction))
 
             physics_params.extend(
                 [

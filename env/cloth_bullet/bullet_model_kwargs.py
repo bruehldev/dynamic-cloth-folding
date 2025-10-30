@@ -241,6 +241,11 @@ def make_bullet_randomization_kwargs(
     assert "cloth" in cfg
     assert "camera_config" in cfg
     assert "render_size" in cfg
+    assert "albumentations_randomization" in cfg
+    assert "camera_position_randomization" in cfg
+    assert "lookat_position_randomization" in cfg
+    assert "lookat_position_randomization_radius" in cfg
+    assert "materials_randomization" in cfg
     assert "folding_task" in cfg
     assert "world" in cfg  # static geometry defaults
     assert "viewer_debug_camera" in cfg
