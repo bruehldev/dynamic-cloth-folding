@@ -133,7 +133,7 @@ class DeformableCloth:
         self.springDampingStiffness = float(spring_c)
         self.frictionCoeff = float(friction)
         # Not exposed by PyBullet for soft bodies; keep for reporting parity only
-        self.thickness = float(self.cloth_cfg.get("thickness", 0.002))
+        self.thickness = float(self.cloth_cfg["thickness"])
 
         self._prev_verts_W = self.get_raw_vertex_positions()
         self.find_corners()
@@ -375,7 +375,7 @@ class DeformableCloth:
         # Tint (materials_randomization) or white
         self._tint_applied = False
         try:
-            if enable_dr and rk.get("materials_randomization", False):
+            if enable_dr and rk["materials_randomization"]:
                 lo = np.array(cloth_cfg["color_lo"])
                 hi = np.array(cloth_cfg["color_hi"])
                 rgba = (np.random.uniform(lo, hi)).tolist()

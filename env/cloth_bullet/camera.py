@@ -97,6 +97,9 @@ class Camera:
         return view_matrix, proj_matrix
 
     def capture_image(self, center_w):
+        assert (
+            self.render_size[0] >= self.image_size[0] and self.render_size[1] >= self.image_size[1]
+        ), "render_size must be >= image_size; set both in bullet_model_kwargs.py"
         view_matrix, proj_matrix = self.get_view_projection_matrices(center_w)
 
         # 1) Render BIG

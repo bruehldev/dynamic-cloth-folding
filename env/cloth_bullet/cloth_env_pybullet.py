@@ -155,7 +155,7 @@ class BulletClothEnv_:
             base_position=base_pos, base_orientation=base_orn, robot_cfg=robot_cfg
         )
         # Robot dynamics DR (only if master switch is ON)
-        if self.enable_dr and self.kwargs.get("dynamics_randomization", True):
+        if self.enable_dr and self.kwargs["dynamics_randomization"]:
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
             _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
             _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))

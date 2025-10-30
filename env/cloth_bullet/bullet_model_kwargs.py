@@ -88,7 +88,7 @@ _DEFAULTS = {
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         "scale_range": [0.10, 0.20],  # used when DR is ON
-        "scale": 0.20,  # deterministic fallback used when DR is OFF
+        "scale": 0.10,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.26,
         "friction_range": [1.5, 3.5],
         "friction": 2.5,  # deterministic fallback if DR is OFF
@@ -110,6 +110,7 @@ _DEFAULTS = {
         "collision_margin_range": [0.008, 0.015],
         "collision_margin": 0.01,
         "settle_steps": 60,
+        "thickness": 0.002,
     },
     "table": {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
@@ -240,6 +241,7 @@ def make_bullet_randomization_kwargs(
     assert "robot" in cfg
     assert "cloth" in cfg
     assert "camera_config" in cfg
+    assert "dynamics_randomization" in cfg, "Add 'dynamics_randomization' (bool) to DR config"
     assert "render_size" in cfg
     assert "albumentations_randomization" in cfg
     assert "camera_position_randomization" in cfg
