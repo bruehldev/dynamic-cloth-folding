@@ -296,6 +296,7 @@ class BulletClothEnv_:
 
     def step(self, action):
         raw_action = action.copy()
+        self.previous_raw_action = raw_action.copy()
         action = raw_action * self.output_max
 
         # Determine which substep to capture the image on, matching original random logic
@@ -333,7 +334,6 @@ class BulletClothEnv_:
         obs = self.get_obs()
         reward, done, info = self._get_reward_and_done(obs, raw_action)
 
-        self.previous_raw_action = raw_action.copy()
         self.current_step += 1
 
         for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):
@@ -454,7 +454,7 @@ class BulletClothEnv_:
         if self.robot_observation == "ee":
             robot_obs = np.concatenate([ee_pos_I, ee_vel_W, desired_pos_ctrl_I])
         else:  # "ctrl"
-            robot_obs = np.concatenate([desired_pos_ctrl_I, ee_vel_W])
+            robot_obs = np.concatenate([self.previous_raw_action, np.zeros(6)])
 
         image_stack = np.array(list(self.frame_stack)).flatten()
 
