@@ -60,6 +60,9 @@ class BulletClothEnv_:
         self.timestep = float(self.kwargs["timestep"])
         self.control_frequency = float(self.kwargs["control_frequency"])
         self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
+        self.filter = float(self.kwargs.get("ctrl_filter", 0.2))
+        steps_per_second = 1.0 / self.timestep
+        self.between_steps = int(1000.0 / steps_per_second)
         self.output_max = float(self.kwargs["output_max"])
         self.robot_observation = str(self.kwargs["robot_observation"])
         self.max_close_steps = int(self.kwargs["max_close_steps"])
@@ -313,10 +316,11 @@ class BulletClothEnv_:
         )
 
         for i in range(self.substeps):
-            alpha = (i + 1) / self.substeps
-            self.desired_pos_ctrl_W = (
-                1 - alpha
-            ) * previous_desired_pos_step_W + alpha * self.desired_pos_step_W
+            for _ in range(self.between_steps):
+                self.desired_pos_ctrl_W = (
+                    self.filter * self.desired_pos_step_W
+                    + (1 - self.filter) * self.desired_pos_ctrl_W
+                )
 
             joint_positions = self.robot.calculate_ik(self.desired_pos_ctrl_W)
             self.robot.apply_joint_positions(joint_positions)
