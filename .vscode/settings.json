@@ -8,7 +8,8 @@
       "source.organizeImports": "explicit"
     }
   },
-
+  "[json]": { "editor.defaultFormatter": "vscode.json-language-features" },
+  "editor.formatOnSave": true,
   "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
   "ruff.importStrategy": "fromEnvironment",
 }

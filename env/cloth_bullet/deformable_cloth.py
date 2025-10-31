@@ -41,6 +41,7 @@ class DeformableCloth:
         base_position,
         cloth_cfg,
         enable_dr,
+        logger,
         target_edge_length=None,
     ):
         """
@@ -49,6 +50,7 @@ class DeformableCloth:
         """
         self.cloth_cfg = cloth_cfg
         self.enable_dr = enable_dr
+        self.logger = logger
 
         # Determine physics properties based on DR mode
         if self.enable_dr:
@@ -328,12 +330,8 @@ class DeformableCloth:
 
                 # Log UV params
                 uv_msg = {"repeat": rep, "rotate_deg": rot_deg, "offset_frac": off}
-                try:
-                    logger = getattr(self, "logger", None)
-                    if logger and hasattr(logger, "log"):
-                        logger.log("LOG:cloth_uv_params", uv_msg)
-                except Exception:
-                    pass
+                # The logger is now guaranteed to exist (real or no-op), so we can call it directly.
+                self.logger.log(f"LOG:cloth_uv_params: {uv_msg}")
 
                 # Build/reuse preprocessed file only if requested and needed
                 need_pre = preprocess and (

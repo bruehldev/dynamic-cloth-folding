@@ -7,6 +7,7 @@ import gym
 import mujoco_py
 import numpy as np
 import torch
+from rlkit.core import logger as rlkit_logger
 from rlkit.data_management import future_obs_dict_replay_buffer
 from rlkit.envs import wrappers
 from rlkit.launchers import launcher_util
@@ -29,7 +30,7 @@ from utils.training_overrides import (
 torch.cuda.empty_cache()
 gym.logger.set_level(50)
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG, format="%(message)s")
+
 
 BACKEND = os.getenv("PHYSICS").lower()
 
@@ -63,6 +64,7 @@ def experiment(variant: TrainingConfig):
         eval_env = ClothEnv(
             **variant["pybullet"]["env_kwargs"],
             randomization_kwargs=variant["pybullet"]["randomization_kwargs"],
+            logger=rlkit_logger,
         )
         randomized_eval_env = eval_env
         env_keys, env_dims = bullet_utils.get_keys_and_dims(

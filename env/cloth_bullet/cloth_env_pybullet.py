@@ -1,4 +1,3 @@
-import contextlib
 import os
 from collections import deque
 from multiprocessing import current_process
@@ -7,6 +6,7 @@ from typing import Any, Optional
 import gym
 import numpy as np
 import psutil
+import pybullet as p
 from gym.utils import EzPickle, seeding
 
 from env.cloth_bullet.camera import Camera
@@ -15,19 +15,22 @@ from env.cloth_bullet.folding_task import FoldingTask
 from env.cloth_bullet.panda_robot import PandaRobot
 from env.cloth_bullet.pybullet_world import PyBulletWorld
 
-try:
-    import pybullet as p
-except Exception as e:
-    p = None
-    _IMPORT_ERR = e
-else:
-    _IMPORT_ERR = None
+
+class _NoOpLogger:
+    """A logger that does nothing, useful for environments in worker processes."""
+
+    def log(self, *args, **kwargs):
+        pass
+
+    def __getattr__(self, name):
+        """Return a no-op function for any attribute access."""
+        return self.log
 
 
 class BulletClothEnv_:
     """
-    PyBullet-Port mit identischer Außen-API zu ClothEnv (MuJoCo).
-    This class coordinates the different components of the simulation.
+    PyBullet-Port with identical external API to ClothEnv (MuJoCo).
+    Coordinates the different components of the simulation.
     """
 
     def __init__(
@@ -38,16 +41,14 @@ class BulletClothEnv_:
         logger: Optional[Any] = None,
         **_,
     ):
-        if _IMPORT_ERR is not None:
-            raise _IMPORT_ERR
-
         self._backend_name = "pybullet"
+        self.logger = logger if logger is not None else _NoOpLogger()
 
         if current_process().name != "MainProcess":
             has_viewer = False
+            self.logger.log("Viewer disabled in subprocess.")
 
         self.process = psutil.Process(os.getpid())
-        self.logger = logger
         self.seed()
 
         # --- Init Params from kwargs ---
@@ -189,11 +190,10 @@ class BulletClothEnv_:
             base_position=cloth_pos,
             cloth_cfg=cloth_cfg,
             enable_dr=self.enable_dr,
+            logger=self.logger,
         )
 
         # Pass logger down so cloth can report texture DR
-        with contextlib.suppress(Exception):
-            self.cloth.logger = self.logger
 
         # Appearance (textures + tint) handled by DeformableCloth
         self.cloth.apply_appearance(self.kwargs)
