@@ -174,9 +174,11 @@ class ClothEnv_(object):
         if randomize:
             choice = np.random.randint(0, df.shape[0] - 1)
             model_kwargs_row = df.iloc[choice]
-
-        if rownum is not None:
+        elif rownum is not None:
             model_kwargs_row = df.iloc[rownum]
+        else:
+            # Default to the first row if not randomizing and no rownum is given
+            model_kwargs_row = df.iloc[0]
 
         for col in model_kwargs.keys():
             model_kwargs[col] = model_kwargs_row[col]
