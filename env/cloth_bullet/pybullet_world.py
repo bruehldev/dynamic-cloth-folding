@@ -17,6 +17,7 @@ class PyBulletWorld:
         self.table_id = None
         self.plane_id = None
         self._table_z = 0.0
+        self._last_phys_params = {}
 
         gvec = np.array(self.cfg["gravity"], dtype=float)
         self.gravity_vec = gvec
@@ -31,6 +32,11 @@ class PyBulletWorld:
     def reset(self):
         p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
         self._setup_simulation_physics()
+        try:
+            if not bool(self.cfg["enable_dr"]):
+                self.apply_deterministic_physics(self.cfg)
+        except Exception:
+            pass
         if self.has_viewer:
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
@@ -74,6 +80,7 @@ class PyBulletWorld:
         p.setTimeStep(self.timestep)
         # --- use cached gravity every reset ---
         p.setGravity(*self.gravity_vec)
+        # p.setPhysicsEngineParameter(enableFileCaching=0)
 
     def step(self):
         p.stepSimulation()
@@ -96,6 +103,7 @@ class PyBulletWorld:
         if self.plane_id is None or self.table_id is None:
             return
 
+        self._last_phys_params = {}
         # ---- Table color + dynamics ----
         tab = dr["table"]
         if tab:
@@ -161,6 +169,7 @@ class PyBulletWorld:
         for k, v in params.items():
             try:
                 p.setPhysicsEngineParameter(**{k: v})
+                self._last_phys_params[k] = v
             except TypeError:
                 # Parameter not supported in this build; skip gracefully
                 pass
@@ -176,6 +185,43 @@ class PyBulletWorld:
                 p.changeVisualShape(self.plane_id, -1, rgbaColor=plane_rgba)
         except Exception:
             pass
+
+    def apply_deterministic_physics(self, dr):
+        """
+        Apply physics params deterministically (midpoints) for DR=OFF parity.
+        """
+        self._last_phys_params = {}
+        phys = dr["physics"]
+
+        def mid(r):
+            return float(0.5 * (r[0] + r[1]))
+
+        params = {
+            "erp": mid(phys["erp_range"]),
+            "contactERP": mid(phys["contact_erp_range"]),
+            "numSolverIterations": int(round(mid(phys["solver_iters_range"]))),
+            "globalCFM": mid(phys["global_cfm_range"]),
+            "solverResidualThreshold": mid(phys["residual_thresh_range"]),
+            "restitutionVelocityThreshold": mid(phys["restitution_vel_thresh_range"]),
+            "contactBreakingThreshold": mid(phys["contact_breaking_threshold_range"]),
+            "sparseSdfVoxelSize": mid(phys["sparse_sdf_voxel_size_range"]),
+        }
+        for k, v in params.items():
+            try:
+                p.setPhysicsEngineParameter(**{k: v})
+                self._last_phys_params[k] = v
+            except Exception:
+                pass
+
+    def get_physics_snapshot(self):
+        """
+        Return the latest physics parameters we *actually* set (for logging),
+        plus gravity and timestep.
+        """
+        snap = dict(self._last_phys_params)
+        snap["gravity"] = tuple(getattr(self, "gravity_vec", (0.0, 0.0, -9.81)))
+        snap["timestep"] = float(self.timestep)
+        return snap
 
     def close(self):
         with contextlib.suppress(Exception):

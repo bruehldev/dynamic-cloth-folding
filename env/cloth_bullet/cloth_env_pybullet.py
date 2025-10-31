@@ -370,8 +370,8 @@ class BulletClothEnv_:
 
         # Use the correct distance for the done condition and success signal
         dist_to_target = distances.get("1", float("inf"))
-        #is_success = dist_to_target < self.success_distance
-        is_success = (reward > self.fail_reward)
+        # is_success = dist_to_target < self.success_distance
+        is_success = reward > self.fail_reward
 
         info = {
             "reward": float(reward),
