@@ -18,7 +18,6 @@ from rlkit.torch.her.cloth import her
 from rlkit.torch.sac import policies as sac_policies
 from rlkit.torch.sac import sac
 
-from env import cloth_env
 from utils import bullet_utils, general_utils
 from utils.collectors import LenientKeyPathCollector
 from utils.training_config import TrainingConfig
@@ -39,6 +38,8 @@ def experiment(variant: TrainingConfig):
     variant = apply_training_env_overrides(variant)
 
     if BACKEND == "mujoco":
+        from env import cloth_env
+
         eval_env = cloth_env.ClothEnv(
             **variant["env_kwargs"], randomization_kwargs=variant["randomization_kwargs"]
         )
@@ -49,26 +50,16 @@ def experiment(variant: TrainingConfig):
         env_keys, env_dims = general_utils.get_keys_and_dims(variant, randomized_eval_env)
 
     else:
-        from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
         from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
 
-        variant["pybullet"] = copy.deepcopy(variant)
-        variant["pybullet"] = apply_training_env_overrides(variant["pybullet"])
-        variant["pybullet"]["policy_kwargs"]["input_channels"] = variant["pybullet"]["env_kwargs"][
-            "frame_stack_size"
-        ]
-        if os.getenv("WITH_GUI", "0") == "1":
-            variant["pybullet"]["env_kwargs"]["has_viewer"] = True
-
-        variant["pybullet"]["randomization_kwargs"] = make_bullet_randomization_kwargs()
         eval_env = ClothEnv(
-            **variant["pybullet"]["env_kwargs"],
-            randomization_kwargs=variant["pybullet"]["randomization_kwargs"],
+            **variant["env_kwargs"],
+            randomization_kwargs=variant["randomization_kwargs"],
             logger=rlkit_logger,
         )
         randomized_eval_env = eval_env
         env_keys, env_dims = bullet_utils.get_keys_and_dims(
-            variant["pybullet"],
+            variant,
             wrappers.NormalizedBoxEnv(eval_env),
         )
 
@@ -153,8 +144,8 @@ def experiment(variant: TrainingConfig):
             from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
 
             return ClothEnv(
-                **variant["pybullet"]["env_kwargs"],
-                randomization_kwargs=variant["pybullet"]["randomization_kwargs"],
+                **variant["env_kwargs"],
+                randomization_kwargs=variant["randomization_kwargs"],
             )
 
     env_functions = [
@@ -226,6 +217,13 @@ def experiment(variant: TrainingConfig):
 if __name__ == "__main__":
     args = general_utils.argsparser()
     variant = general_utils.get_variant(args)
+
+    if BACKEND == "bullet":
+        from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
+
+        if os.getenv("WITH_GUI", "0") == "1":
+            variant["env_kwargs"]["has_viewer"] = True
+        variant["randomization_kwargs"] = make_bullet_randomization_kwargs()
 
     general_utils.setup_training_device()
     general_utils.setup_save_folder(variant)
