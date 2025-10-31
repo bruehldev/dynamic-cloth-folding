@@ -1,13 +1,11 @@
 # env/cloth_bullet/bullet_model_kwargs.py
-import os
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
 # Default DR configuration for the Bullet backend.
 _DEFAULTS = {
-    # master toggle (set at runtime in make_bullet_randomization_kwargs)
-    "enable_dr": True,
     # image & rendering
+    "physics_backend": "bullet",
     "render_size": [320, 240],  # [W, H]
     "show_depth_preview": 1,
     "show_seg_preview": 1,
@@ -225,7 +223,6 @@ def _deep_merge(dst: dict, src: dict):
 
 
 def make_bullet_randomization_kwargs(
-    enable_dr: Optional[bool] = None,
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
@@ -233,11 +230,6 @@ def make_bullet_randomization_kwargs(
     - Any keys in `overrides` are deep-merged into the defaults.
     """
     cfg = deepcopy(_DEFAULTS)
-
-    if enable_dr is None:
-        enable_dr = os.getenv("DR", "0") == "1"
-
-    cfg["enable_dr"] = bool(enable_dr)
 
     # Assert that required keys exist to avoid silent failures
     assert "robot" in cfg

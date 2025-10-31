@@ -40,7 +40,7 @@ class DeformableCloth:
         self,
         base_position,
         cloth_cfg,
-        enable_dr,
+        randomization_kwargs,
         logger,
         target_edge_length=None,
     ):
@@ -49,11 +49,11 @@ class DeformableCloth:
         its XY edge length matches target_edge_length (MuJoCo's cloth_size).
         """
         self.cloth_cfg = cloth_cfg
-        self.enable_dr = enable_dr
+        self.randomization_kwargs = randomization_kwargs
         self.logger = logger
 
         # Determine physics properties based on DR mode
-        if self.enable_dr:
+        if self.randomization_kwargs["dynamics_randomization"]:
             friction = float(np.random.uniform(*self.cloth_cfg["friction_range"]))
             spring_k = float(np.random.uniform(*self.cloth_cfg["spring_k_range"]))
             spring_c = float(np.random.uniform(*self.cloth_cfg["spring_c_range"]))
@@ -88,7 +88,7 @@ class DeformableCloth:
             return body_id
 
         # If no target size is requested, load once with the given scale.
-        if self.enable_dr:
+        if self.randomization_kwargs["dynamics_randomization"]:
             scale = float(np.random.uniform(*self.cloth_cfg["scale_range"]))
         else:
             scale = float(self.cloth_cfg["scale"])
@@ -272,12 +272,9 @@ class DeformableCloth:
             return None
 
     def apply_appearance(self, randomization_kwargs=None):
-        """Apply texture (random if DR) and optional DR tint to this cloth.
-        Uses BULLET_DR via `randomization_kwargs['enable_dr']` (set in train.py).
-        """
+        """Apply texture (random if DR) and optional DR tint to this cloth."""
         # Strict: require all values in kwargs; KeyError if missing
         rk = randomization_kwargs
-        enable_dr = bool(rk["enable_dr"])
         cloth_cfg = rk["cloth"]
 
         # paths from config
@@ -289,7 +286,7 @@ class DeformableCloth:
 
         tex_path = None
         # Use the top-level materials_randomization
-        if enable_dr and rk["materials_randomization"]:
+        if rk["texture_randomization"]:
             tex_path = self._pick_random_texture(template_dir)
 
         if not tex_path:
@@ -311,12 +308,12 @@ class DeformableCloth:
                         ry0, ry1 = uv_cfg["repeat_y_range"]
                         rep = [int(np.random.uniform(rx0, rx1)), int(np.random.uniform(ry0, ry1))]
                     rep = [max(1, min(4, int(rep[0]))), max(1, min(4, int(rep[1])))]  # clamp
-                    if enable_dr and "rotate_deg_range" in uv_cfg:
+                    if rk["texture_randomization"] and "rotate_deg_range" in uv_cfg:
                         lo, hi = uv_cfg["rotate_deg_range"]
                         rot_deg = float(np.random.uniform(float(lo), float(hi)))
                     else:
                         rot_deg = float(uv_cfg["rotate_deg"])
-                    if enable_dr and "offset_frac_range" in uv_cfg:
+                    if rk["texture_randomization"] and "offset_frac_range" in uv_cfg:
                         ox = np.random.uniform(*uv_cfg["offset_frac_range"][0])
                         oy = np.random.uniform(*uv_cfg["offset_frac_range"][1])
                         off = [float(ox), float(oy)]
@@ -373,7 +370,7 @@ class DeformableCloth:
         # Tint (materials_randomization) or white
         self._tint_applied = False
         try:
-            if enable_dr and rk["materials_randomization"]:
+            if rk["materials_randomization"]:
                 lo = np.array(cloth_cfg["color_lo"])
                 hi = np.array(cloth_cfg["color_hi"])
                 rgba = (np.random.uniform(lo, hi)).tolist()

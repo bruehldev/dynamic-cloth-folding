@@ -2,6 +2,7 @@
 import copy
 import logging
 import os
+from typing import Literal
 
 import gym
 import mujoco_py
@@ -20,7 +21,7 @@ from rlkit.torch.sac import sac
 
 from utils import bullet_utils, general_utils
 from utils.collectors import LenientKeyPathCollector
-from utils.training_config import TrainingConfig
+from utils.training_config import TrainingConfigBase
 from utils.training_overrides import (
     apply_training_env_overrides,
     use_inprocess_collector,
@@ -30,13 +31,11 @@ torch.cuda.empty_cache()
 gym.logger.set_level(50)
 logger = logging.getLogger(__name__)
 
+PhysicsBackend = Literal["mujoco", "bullet"]
+BACKEND: PhysicsBackend = os.getenv("PHYSICS").lower()
 
-BACKEND = os.getenv("PHYSICS").lower()
 
-
-def experiment(variant: TrainingConfig):
-    variant = apply_training_env_overrides(variant)
-
+def experiment(variant: TrainingConfigBase):
     if BACKEND == "mujoco":
         from env import cloth_env
 
@@ -63,10 +62,7 @@ def experiment(variant: TrainingConfig):
             wrappers.NormalizedBoxEnv(eval_env),
         )
 
-    logger.debug(
-        f"PHYSICS backend: {getattr(eval_env, '_backend_name', 'unknown')} | "
-        f"class: {type(eval_env).__name__}"
-    )
+    logger.debug(f"PHYSICS backend: {BACKEND}, Eval Env class: {type(eval_env).__name__}")
 
     fc_width, fc_depth = (
         variant["value_function_kwargs"]["fc_layer_size"],
@@ -217,6 +213,7 @@ def experiment(variant: TrainingConfig):
 if __name__ == "__main__":
     args = general_utils.argsparser()
     variant = general_utils.get_variant(args)
+    variant["randomization_kwargs"]["physics_backend"] = BACKEND
 
     if BACKEND == "bullet":
         from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
@@ -224,6 +221,8 @@ if __name__ == "__main__":
         if os.getenv("WITH_GUI", "0") == "1":
             variant["env_kwargs"]["has_viewer"] = True
         variant["randomization_kwargs"] = make_bullet_randomization_kwargs()
+
+    variant = apply_training_env_overrides(variant)
 
     general_utils.setup_training_device()
     general_utils.setup_save_folder(variant)

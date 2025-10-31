@@ -167,7 +167,6 @@ class FoldingTaskConfig(TypedDict, total=False):
 
 # ---------- randomization ----------
 class RandomizationKwargs(TypedDict, total=False):
-    enable_dr: bool
     render_size: IVec2
     show_depth_preview: Union[int, bool]
     show_seg_preview: Union[int, bool]
@@ -314,7 +313,3 @@ class TrainingConfigBase(TypedDict, total=False):
     path_collector_kwargs: PathCollectorKwargs
     replay_buffer_kwargs: ReplayBufferKwargs
     trainer_kwargs: TrainerKwargs
-
-
-class TrainingConfig(TrainingConfigBase, total=False):
-    pybullet: NotRequired[TrainingConfigBase]

@@ -10,7 +10,6 @@ class Camera:
         self.image_size = image_size  # final policy size, e.g. (100, 100)
         self.randomization_kwargs = randomization_kwargs
         self.albumentations_transform = None
-        self.enable_dr = self.randomization_kwargs["enable_dr"]
         # Cache camera config block for convenience
         self._cam_cfg = self.randomization_kwargs["camera_config"]
 
@@ -21,7 +20,7 @@ class Camera:
         self._episode_eye = None
         self._episode_fov = None
         # Only construct augmentation pipeline if DR + flag are ON
-        if self.enable_dr and self.randomization_kwargs["albumentations_randomization"]:
+        if self.randomization_kwargs["albumentations_randomization"]:
             import albumentations as A
 
             cfg = self.randomization_kwargs["albumentations_config"]
@@ -37,7 +36,7 @@ class Camera:
 
     def begin_episode(self, center_w):
         cfg = self._cam_cfg
-        if self.enable_dr and self.randomization_kwargs["camera_position_randomization"]:
+        if self.randomization_kwargs["camera_position_randomization"]:
             fmin, fmax = cfg["fovy_range"]
             self._episode_fov = np.random.uniform(fmin, fmax)
         else:
@@ -45,7 +44,7 @@ class Camera:
 
         # Freeze look-at for the whole episode
         center = np.array(center_w, dtype=float)
-        if self.enable_dr and self.randomization_kwargs["lookat_position_randomization"]:
+        if self.randomization_kwargs["lookat_position_randomization"]:
             r = self.randomization_kwargs["lookat_position_randomization_radius"]
             center = center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
         self._episode_center = center
@@ -53,12 +52,17 @@ class Camera:
         # Pick camera type once per episode (support "all")
         cam_type = cfg["type"]
         if cam_type == "all":
-            cam_type = np.random.choice(list(cfg["types"].keys())) if self.enable_dr else "default"
+            # If any camera-related DR is on, allow random choice. Otherwise, use default.
+            is_dr_active = (
+                self.randomization_kwargs["camera_position_randomization"]
+                or self.randomization_kwargs["lookat_position_randomization"]
+            )
+            cam_type = np.random.choice(list(cfg["types"].keys())) if is_dr_active else "default"
         # print(f"Camera type for this episode: {cam_type}")
         eye, up = self._get_eye_from_type(center, cam_type)
 
         # Freeze eye jitter once per episode
-        if self.enable_dr and self.randomization_kwargs["camera_position_randomization"]:
+        if self.randomization_kwargs["camera_position_randomization"]:
             jx, jy, jz = cfg["jitter_xyz"]
             eye = np.array(eye) + [
                 np.random.uniform(-jx, jx),
@@ -74,7 +78,12 @@ class Camera:
         eye = cam_spec["eye"]
         up = cam_spec["up"]
 
-        if self.enable_dr:
+        # If any camera-related DR is on, treat eye as an offset.
+        is_dr_active = (
+            self.randomization_kwargs["camera_position_randomization"]
+            or self.randomization_kwargs["lookat_position_randomization"]
+        )
+        if is_dr_active:
             # When DR is ON, treat eye as an offset from the cloth center.
             return (np.array(center_w) + np.array(eye)).tolist(), up
         else:
@@ -109,7 +118,7 @@ class Camera:
 
         # --- MuJoCo-like lighting ---
         lights_cfg = self.randomization_kwargs["lights"]
-        if self.enable_dr and self.randomization_kwargs["lights_randomization"]:
+        if self.randomization_kwargs["lights_randomization"]:
             # Randomized lights
             ldir = np.random.uniform(*lights_cfg["direction_range"]).tolist()
             lcol = np.random.uniform(*lights_cfg["color_range"]).tolist()
@@ -143,7 +152,7 @@ class Camera:
         img = img[y0 : y0 + H_out, x0 : x0 + W_out, :]
 
         # 3) Albumentations only if enabled (MuJoCo parity)
-        if self.enable_dr and self.randomization_kwargs["albumentations_randomization"]:
+        if self.randomization_kwargs["albumentations_randomization"]:
             img = self.albumentations_transform(image=img)["image"]
 
         # 4) Grayscale (MuJoCo policy input is gray)
@@ -176,7 +185,7 @@ class Camera:
         paste:
         - "relative": store an OFFSET from the episode center (use this when DR is ON)
         - "absolute": store an absolute world position (use when DR is OFF / fixed cam)
-        - "auto"    : picks relative if self.enable_dr else absolute
+        - "auto"    : picks relative if DR is active, else absolute
         """
         import numpy as np
         import pybullet as p
@@ -197,7 +206,11 @@ class Camera:
         rel_eye = np.round((eye - center), decimals).tolist()
 
         if paste == "auto":
-            paste = "relative" if getattr(self, "enable_dr", False) else "absolute"
+            is_dr_active = (
+                self.randomization_kwargs["camera_position_randomization"]
+                or self.randomization_kwargs["lookat_position_randomization"]
+            )
+            paste = "relative" if is_dr_active else "absolute"
 
         if paste == "relative":
             print(f'"{name}": {{"eye": {rel_eye}, "up": [0.0, 0.0, 1.0]}},')

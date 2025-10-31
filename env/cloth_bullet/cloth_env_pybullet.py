@@ -41,7 +41,6 @@ class BulletClothEnv_:
         logger: Optional[Any] = None,
         **_,
     ):
-        self._backend_name = "pybullet"
         self.logger = logger if logger is not None else _NoOpLogger()
 
         if current_process().name != "MainProcess":
@@ -53,7 +52,6 @@ class BulletClothEnv_:
 
         # --- Init Params from kwargs ---
         self.kwargs = randomization_kwargs
-        self.enable_dr = self.kwargs["enable_dr"]
 
         task_cfg = self.kwargs["folding_task"]
         self.task_name = self.kwargs["task_name"]
@@ -136,7 +134,7 @@ class BulletClothEnv_:
             pass
         self.episode_ee_close_steps = 0
         self.world.reset()
-        if self.enable_dr:
+        if self.kwargs["dynamics_randomization"]:  # Check if dynamics randomization is good name
             self.world.apply_domain_randomization(self.kwargs)
 
         # Create robot and cloth
@@ -147,13 +145,13 @@ class BulletClothEnv_:
             base_position=base_pos, base_orientation=base_orn, robot_cfg=robot_cfg
         )
         # Robot dynamics DR (only if master switch is ON)
-        if self.enable_dr and self.kwargs["dynamics_randomization"]:
+        if self.kwargs["dynamics_randomization"]:
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
             _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
             _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))
             # Prefer the PandaRobot helper if present; call positionally for max compatibility.
             self.robot.randomize_dynamics(_lin, _ang, _frc)
-        else:  # also covers not self.enable_dr
+        else:
             _lin = float(robot_cfg["lin_damping"])
             _ang = float(robot_cfg["ang_damping"])
             _frc = float(robot_cfg["lateral_friction"])
@@ -170,7 +168,7 @@ class BulletClothEnv_:
         # ---- Cloth domain randomization (physics + size + optional color) ----
 
         # --- Cloth size ---
-        if self.enable_dr:
+        if self.kwargs["dynamics_randomization"]:
             scale_guess = float(self.np_random.uniform(*cloth_cfg["scale_range"]))
         else:
             scale_guess = float(cloth_cfg["scale"])
@@ -189,7 +187,7 @@ class BulletClothEnv_:
         self.cloth = DeformableCloth(
             base_position=cloth_pos,
             cloth_cfg=cloth_cfg,
-            enable_dr=self.enable_dr,
+            randomization_kwargs=self.kwargs,
             logger=self.logger,
         )
 
@@ -212,8 +210,7 @@ class BulletClothEnv_:
         self.task = FoldingTask(
             self.task_name,
             self.cloth,
-            self.kwargs["folding_task"],
-            self.enable_dr,
+            self.kwargs,
             self.np_random,
         )
 
@@ -257,10 +254,8 @@ class BulletClothEnv_:
             self.frame_stack.append(img)
 
         # Randomize cloth color (skip if DeformableCloth already tinted)
-        if (
-            self.enable_dr
-            and self.kwargs["materials_randomization"]
-            and not getattr(self.cloth, "_tint_applied", False)
+        if self.kwargs["materials_randomization"] and not getattr(
+            self.cloth, "_tint_applied", False
         ):
             lo = np.array(cloth_cfg["color_lo"])
             hi = np.array(cloth_cfg["color_hi"])
@@ -454,7 +449,7 @@ class BulletClothEnv_:
 
         # --- Physics DR scalars (MuJoCo parity) ---
         physics_params = []
-        if self.enable_dr and self.kwargs["dynamics_randomization"]:
+        if self.kwargs["dynamics_randomization"]:
             # strict: these must be set during reset()/DR
             g = float(self.world.gravity)
             tab_mu = float(self.world.table_lateral_friction)

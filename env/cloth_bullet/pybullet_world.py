@@ -32,11 +32,8 @@ class PyBulletWorld:
     def reset(self):
         p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
         self._setup_simulation_physics()
-        try:
-            if not bool(self.cfg["enable_dr"]):
-                self.apply_deterministic_physics(self.cfg)
-        except Exception:
-            pass
+        self.apply_deterministic_physics(self.cfg)
+
         if self.has_viewer:
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
@@ -105,13 +102,16 @@ class PyBulletWorld:
 
         self._last_phys_params = {}
         # ---- Table color + dynamics ----
-        tab = dr["table"]
-        if tab:
-            lo = np.array(tab["color_lo"], dtype=float)
-            hi = np.array(tab["color_hi"], dtype=float)
-            rgba = np.random.uniform(lo, hi).tolist()
-            p.changeVisualShape(self.table_id, -1, rgbaColor=rgba)
+        if dr["materials_randomization"]:
+            tab = dr["table"]
+            if tab:
+                lo = np.array(tab["color_lo"], dtype=float)
+                hi = np.array(tab["color_hi"], dtype=float)
+                rgba = np.random.uniform(lo, hi).tolist()
+                p.changeVisualShape(self.table_id, -1, rgbaColor=rgba)
 
+        if dr["dynamics_randomization"]:
+            tab = dr["table"]
             lat_lo, lat_hi = tab["lateral_friction_range"]
             res_lo, res_hi = tab["restitution_range"]
             self.table_lateral_friction = float(np.random.uniform(lat_lo, lat_hi))
@@ -128,12 +128,13 @@ class PyBulletWorld:
             )
 
         # ---- Floor color (optional) ----
-        flo = dr["floor"]
-        if flo:
-            lo = np.array(flo["color_lo"], dtype=float)
-            hi = np.array(flo["color_hi"], dtype=float)
-            rgba = np.random.uniform(lo, hi).tolist()
-            p.changeVisualShape(self.plane_id, -1, rgbaColor=rgba)
+        if dr["materials_randomization"]:
+            flo = dr["floor"]
+            if flo:
+                lo = np.array(flo["color_lo"], dtype=float)
+                hi = np.array(flo["color_hi"], dtype=float)
+                rgba = np.random.uniform(lo, hi).tolist()
+                p.changeVisualShape(self.plane_id, -1, rgbaColor=rgba)
 
         # ---- Gravity DR (vector) ----
         if dr["gravity_randomization"]:
@@ -150,41 +151,45 @@ class PyBulletWorld:
 
         # --- Physics / solver knobs (MuJoCo solref/solimp analogs) ---
         # Be defensive: different pybullet builds expose different parameter names.
-        phys = dr["physics"]
-        params = {
-            "erp": float(np.random.uniform(*phys["erp_range"])),
-            "contactERP": float(np.random.uniform(*phys["contact_erp_range"])),
-            "numSolverIterations": int(np.random.uniform(*phys["solver_iters_range"])),
-            "globalCFM": float(np.random.uniform(*phys["global_cfm_range"])),
-            "solverResidualThreshold": float(np.random.uniform(*phys["residual_thresh_range"])),
-            "restitutionVelocityThreshold": float(
-                np.random.uniform(*phys["restitution_vel_thresh_range"])
-            ),
-            "contactBreakingThreshold": float(
-                np.random.uniform(*phys["contact_breaking_threshold_range"])
-            ),
-            "sparseSdfVoxelSize": float(np.random.uniform(*phys["sparse_sdf_voxel_size_range"])),
-        }
+        if dr["dynamics_randomization"]:
+            phys = dr["physics"]
+            params = {
+                "erp": float(np.random.uniform(*phys["erp_range"])),
+                "contactERP": float(np.random.uniform(*phys["contact_erp_range"])),
+                "numSolverIterations": int(np.random.uniform(*phys["solver_iters_range"])),
+                "globalCFM": float(np.random.uniform(*phys["global_cfm_range"])),
+                "solverResidualThreshold": float(np.random.uniform(*phys["residual_thresh_range"])),
+                "restitutionVelocityThreshold": float(
+                    np.random.uniform(*phys["restitution_vel_thresh_range"])
+                ),
+                "contactBreakingThreshold": float(
+                    np.random.uniform(*phys["contact_breaking_threshold_range"])
+                ),
+                "sparseSdfVoxelSize": float(
+                    np.random.uniform(*phys["sparse_sdf_voxel_size_range"])
+                ),
+            }
 
-        for k, v in params.items():
-            try:
-                p.setPhysicsEngineParameter(**{k: v})
-                self._last_phys_params[k] = v
-            except TypeError:
-                # Parameter not supported in this build; skip gracefully
-                pass
-            except Exception:
-                # Any other runtime issue (e.g., wrong value range); also skip
-                pass
+            for k, v in params.items():
+                try:
+                    p.setPhysicsEngineParameter(**{k: v})
+                    self._last_phys_params[k] = v
+                except TypeError:
+                    # Parameter not supported in this build; skip gracefully
+                    pass
+                except Exception:
+                    # Any other runtime issue (e.g., wrong value range); also skip
+                    pass
 
         # Optional: small visual variability for the plane as a stand-in for material flips
-        try:
-            plane_rgba = (np.random.uniform(0.6, 0.95, size=4)).tolist()
-            plane_rgba[-1] = 1.0
-            if self.plane_id is not None:
-                p.changeVisualShape(self.plane_id, -1, rgbaColor=plane_rgba)
-        except Exception:
-            pass
+        if dr["materials_randomization"]:
+            try:
+                plane_rgba = (np.random.uniform(0.6, 0.95, size=4)).tolist()
+                plane_rgba[-1] = 1.0
+                if self.plane_id is not None:
+                    p.changeVisualShape(self.plane_id, -1, rgbaColor=plane_rgba)
+            except Exception:
+                pass
 
     def apply_deterministic_physics(self, dr):
         """

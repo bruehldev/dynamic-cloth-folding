@@ -1,6 +1,8 @@
 # utils/training_overrides.py
 import os
 
+from utils.training_config import TrainingConfigBase
+
 
 def use_inprocess_collector() -> bool:
     """
@@ -12,7 +14,7 @@ def use_inprocess_collector() -> bool:
     return with_gui and physics_is_bullet
 
 
-def apply_training_env_overrides(variant: dict) -> dict:
+def apply_training_env_overrides(variant: TrainingConfigBase) -> dict:
     """
     Apply environment-variable based overrides to keep train.py lean.
     - Respects SMOKE_TRAIN=1 (skip heavy overrides).
@@ -26,6 +28,21 @@ def apply_training_env_overrides(variant: dict) -> dict:
     pck["num_processes"] = int(os.getenv("NUM_PROCS", pck.get("num_processes")))
 
     use_smoke = os.getenv("SMOKE_TRAIN", "0") == "1"
+
+    enable_dr = os.getenv("DR", "0") == "1"
+    if not enable_dr:
+        variant["randomization_kwargs"]["albumentations_randomization"] = False
+        variant["randomization_kwargs"]["camera_position_randomization"] = False
+        variant["randomization_kwargs"]["dynamics_randomization"] = False
+        variant["randomization_kwargs"]["lights_randomization"] = False
+        variant["randomization_kwargs"]["texture_randomization"] = False
+        variant["randomization_kwargs"]["lookat_position_randomization"] = False
+        variant["randomization_kwargs"]["materials_randomization"] = False
+        variant["randomization_kwargs"]["gravity_randomization"] = False
+
+    else:
+        if variant["randomization_kwargs"]["physics_backend"] == "bullet":
+            variant["randomization_kwargs"]["texture_randomization"] = True
 
     # Optional evaluation frequency shortcut (skip in smoke mode)
     eval_freq = os.getenv("EVAL_FREQ")
