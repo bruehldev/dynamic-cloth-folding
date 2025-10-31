@@ -346,15 +346,17 @@ class BulletClothEnv_:
         reward = self.task.compute_reward(obs["achieved_goal"], self.goal, {})
 
         cloth_pos_I = self.get_cloth_position_I()
-        corner_positions = np.array(
-            [
-                cloth_pos_I[self.cloth.corner_v_names["0"]][:2],
-                cloth_pos_I[self.cloth.corner_v_names["1"]][:2],
-                cloth_pos_I[self.cloth.corner_v_names["2"]][:2],
-                cloth_pos_I[self.cloth.corner_v_names["3"]][:2],
-            ],
-            dtype=np.float32,
-        )
+        # This is now calculated below using camera projection
+        # corner_positions = np.array(
+        #     [
+        #         cloth_pos_I[self.cloth.corner_v_names["0"]][:2],
+        #         cloth_pos_I[self.cloth.corner_v_names["1"]][:2],
+        #         cloth_pos_I[self.cloth.corner_v_names["2"]][:2],
+        #         cloth_pos_I[self.cloth.corner_v_names["3"]][:2],
+        #     ],
+        #     dtype=np.float32,
+        # )
+        corner_positions = self._get_corner_image_positions()
 
         # Calculate all corner distances for the info dict
         inv_map = {v: k for k, v in self.cloth.corner_v_names.items()}
@@ -368,7 +370,8 @@ class BulletClothEnv_:
 
         # Use the correct distance for the done condition and success signal
         dist_to_target = distances.get("1", float("inf"))
-        is_success = dist_to_target < self.success_distance
+        #is_success = dist_to_target < self.success_distance
+        is_success = (reward > self.fail_reward)
 
         info = {
             "reward": float(reward),
@@ -403,6 +406,38 @@ class BulletClothEnv_:
         # if self.current_step == 1:
         # print(f"Debug: corner_1 distance: {info['corner_1']}")
         return reward, done, info
+
+    def _get_corner_image_positions(self):
+        """Projects cloth corner vertices into normalized image coordinates."""
+        w, h = self.image_size
+        view_matrix, proj_matrix = self.camera.get_view_projection_matrices(self._camera_target)
+        view_proj_matrix = np.array(proj_matrix).reshape(4, 4) @ np.array(view_matrix).reshape(4, 4)
+
+        corners_w = self.cloth.get_positions_W()
+        corner_names = ["0", "1", "2", "3"]
+        flattened_corners = []
+
+        for name in corner_names:
+            v_name = self.cloth.corner_v_names[name]
+            pos_w = corners_w[v_name]
+            pos_h = np.array([pos_w[0], pos_w[1], pos_w[2], 1.0])
+
+            # Project to clip space
+            clip = view_proj_matrix @ pos_h
+            if abs(clip[3]) < 1e-6:
+                flattened_corners.extend([0.0, 0.0])
+                continue
+
+            # NDC space
+            ndc = clip[:3] / clip[3]
+
+            # Image space (0 to 1)
+            u = (ndc[0] + 1) / 2
+            v = (1 - ndc[1]) / 2  # Y is inverted
+
+            flattened_corners.extend([u, v])
+
+        return np.array(flattened_corners, dtype=np.float32)
 
     def get_obs(self):
         cloth_pos_I = self.get_cloth_position_I()
