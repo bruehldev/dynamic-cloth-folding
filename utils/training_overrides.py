@@ -41,7 +41,7 @@ def apply_training_env_overrides(variant: TrainingConfigBase) -> dict:
         variant["randomization_kwargs"]["gravity_randomization"] = False
 
     else:
-        if variant["randomization_kwargs"]["physics_backend"] == "bullet":
+        if variant["physics_backend"] == "bullet":
             variant["randomization_kwargs"]["texture_randomization"] = True
 
     # Optional evaluation frequency shortcut (skip in smoke mode)

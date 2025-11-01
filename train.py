@@ -213,7 +213,7 @@ def experiment(variant: TrainingConfigBase):
 if __name__ == "__main__":
     args = general_utils.argsparser()
     variant = general_utils.get_variant(args)
-    variant["randomization_kwargs"]["physics_backend"] = BACKEND
+    variant["physics_backend"] = BACKEND
 
     if BACKEND == "bullet":
         from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs

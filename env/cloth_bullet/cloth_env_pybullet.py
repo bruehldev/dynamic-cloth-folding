@@ -39,7 +39,7 @@ class BulletClothEnv_:
         save_folder=None,
         has_viewer=False,
         logger: Optional[Any] = None,
-        **_,
+        **kwargs,
     ):
         self.logger = logger if logger is not None else _NoOpLogger()
 
@@ -52,6 +52,7 @@ class BulletClothEnv_:
 
         # --- Init Params from kwargs ---
         self.kwargs = randomization_kwargs
+        self.kwargs.update(kwargs)  # Merge env_kwargs
 
         task_cfg = self.kwargs["folding_task"]
         self.task_name = self.kwargs["task_name"]
@@ -59,7 +60,7 @@ class BulletClothEnv_:
         self.timestep = float(self.kwargs["timestep"])
         self.control_frequency = float(self.kwargs["control_frequency"])
         self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
-        self.filter = float(self.kwargs.get("ctrl_filter", 0.2))
+        self.filter = float(self.kwargs["ctrl_filter"])
         steps_per_second = 1.0 / self.timestep
         self.between_steps = int(1000.0 / steps_per_second)
         self.output_max = float(self.kwargs["output_max"])
@@ -342,31 +343,49 @@ class BulletClothEnv_:
 
         cloth_pos_I = self.get_cloth_position_I()
         # This is now calculated below using camera projection
-        # corner_positions = np.array(
-        #     [
-        #         cloth_pos_I[self.cloth.corner_v_names["0"]][:2],
-        #         cloth_pos_I[self.cloth.corner_v_names["1"]][:2],
-        #         cloth_pos_I[self.cloth.corner_v_names["2"]][:2],
-        #         cloth_pos_I[self.cloth.corner_v_names["3"]][:2],
-        #     ],
-        #     dtype=np.float32,
-        # )
-        corner_positions = self._get_corner_image_positions()
+        corner_positions = np.array(
+            [
+                cloth_pos_I[self.cloth.corner_v_names["0"]][:2],
+                cloth_pos_I[self.cloth.corner_v_names["1"]][:2],
+                cloth_pos_I[self.cloth.corner_v_names["2"]][:2],
+                cloth_pos_I[self.cloth.corner_v_names["3"]][:2],
+            ],
+            dtype=np.float32,
+        )
+        # corner_positions = self._get_corner_image_positions()
 
         # Calculate all corner distances for the info dict
-        inv_map = {v: k for k, v in self.cloth.corner_v_names.items()}
-        distances = {"0": 0, "1": 0, "2": 0, "3": 0}
-        for c in self.task.constraints:
-            s1_v_idx = self.cloth.sites.get(c["origin"])
-            if s1_v_idx in inv_map:
-                s2_v_idx = self.cloth.sites.get(c["target"])
-                dist = np.linalg.norm(cloth_pos_I[s1_v_idx] - cloth_pos_I[s2_v_idx])
-                distances[inv_map[s1_v_idx]] = dist
+        # Map vertex name to site name, and site name to its index in the goal vector.
+        vertex_to_site_name = {v: s for s, v in self.cloth.sites.items()}
+        site_name_to_goal_idx = {c["origin"]: i for i, c in enumerate(self.task.constraints)}
+
+        distances = {}
+        all_targets_I = [self.goal[i * 3 : (i + 1) * 3] for i in range(len(self.task.constraints))]
+
+        for corner_key in ("0", "1", "2", "3"):
+            v_name = self.cloth.corner_v_names[corner_key]
+            achieved_pos_I = cloth_pos_I[v_name]
+            site_name = vertex_to_site_name.get(v_name)
+
+            if site_name and site_name in site_name_to_goal_idx:
+                # This corner is a constrained "origin" site; calculate distance to its specific target.
+                goal_idx = site_name_to_goal_idx[site_name]
+                target_pos_I = self.goal[goal_idx * 3 : (goal_idx + 1) * 3]
+                distances[corner_key] = float(np.linalg.norm(achieved_pos_I - target_pos_I))
+            elif all_targets_I:
+                # This corner is not a constrained origin. As a fallback, find its distance
+                # to the closest of any of the available targets.
+                distances[corner_key] = float(
+                    min(np.linalg.norm(achieved_pos_I - t) for t in all_targets_I)
+                )
+            else:
+                # No constraints/targets defined, distance is 0.
+                distances[corner_key] = 0.0
 
         # Use the correct distance for the done condition and success signal
-        dist_to_target = distances.get("1", float("inf"))
-        # is_success = dist_to_target < self.success_distance
-        is_success = reward > self.fail_reward
+        dist_to_target = distances["1"]
+        is_success = dist_to_target < self.success_distance
+        # is_success = reward > self.fail_reward
 
         info = {
             "reward": float(reward),
