@@ -1,5 +1,3 @@
-import os
-
 import cv2
 import numpy as np
 import pybullet as p
@@ -7,23 +5,18 @@ import pybullet as p
 
 class Camera:
     def __init__(self, image_size, randomization_kwargs):
-        self.image_size = image_size  # final policy size, e.g. (100, 100)
+        # Match call site in cloth_env_pybullet.py
+        self.image_size = image_size
         self.randomization_kwargs = randomization_kwargs
+        self._cam_cfg = randomization_kwargs["camera_config"]
+        self.render_size = tuple(randomization_kwargs["render_size"])  # (W_render, H_render)
+        # We run under EGL; render with hardware OpenGL (no fallbacks).
+        self._renderer = p.ER_BULLET_HARDWARE_OPENGL
         self.albumentations_transform = None
-        # Cache camera config block for convenience
-        self._cam_cfg = self.randomization_kwargs["camera_config"]
-
-        # NEW: high-res render size (W_render, H_render)
-        self.render_size = tuple(self.randomization_kwargs["render_size"])
-
-        self._episode_center = None
-        self._episode_eye = None
-        self._episode_fov = None
-        # Only construct augmentation pipeline if DR + flag are ON
-        if self.randomization_kwargs["albumentations_randomization"]:
+        if randomization_kwargs.get("albumentations_randomization"):
             import albumentations as A
 
-            cfg = self.randomization_kwargs["albumentations_config"]
+            cfg = randomization_kwargs["albumentations_config"]
             self.albumentations_transform = A.Compose(
                 [
                     A.RGBShift(**cfg["RGBShift"]),
@@ -34,6 +27,7 @@ class Camera:
                 ]
             )
 
+    # -------- episode plumbing (kept short and deterministic) --------
     def begin_episode(self, center_w):
         cfg = self._cam_cfg
         if self.randomization_kwargs["camera_position_randomization"]:
@@ -41,16 +35,14 @@ class Camera:
             self._episode_fov = np.random.uniform(fmin, fmax)
         else:
             self._episode_fov = cfg["train_camera_fovy"]
-
-        # Freeze look-at for the whole episode
-        center = np.array(center_w, dtype=float)
+        self.center = np.array(center_w, dtype=float)
         if self.randomization_kwargs["lookat_position_randomization"]:
             r = self.randomization_kwargs["lookat_position_randomization_radius"]
-            center = center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
-        self._episode_center = center
-
-        # Pick camera type once per episode (support "all")
-        cam_type = cfg["type"]
+            self.center = self.center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
+        self._episode_center = self.center
+        # Use the configured FOV and the “default” camera type (stable)
+        self._fov = float(self._cam_cfg["train_camera_fovy"])
+        cam_type = self._cam_cfg["type"]
         if cam_type == "all":
             # If any camera-related DR is on, allow random choice. Otherwise, use default.
             is_dr_active = (
@@ -59,18 +51,18 @@ class Camera:
             )
             cam_type = np.random.choice(list(cfg["types"].keys())) if is_dr_active else "default"
         # print(f"Camera type for this episode: {cam_type}")
-        eye, up = self._get_eye_from_type(center, cam_type)
+        self.eye, self.up = self._get_eye_from_type(self.center, cam_type)
 
         # Freeze eye jitter once per episode
         if self.randomization_kwargs["camera_position_randomization"]:
             jx, jy, jz = cfg["jitter_xyz"]
-            eye = np.array(eye) + [
+            self.eye = np.array(self.eye) + [
                 np.random.uniform(-jx, jx),
                 np.random.uniform(-jy, jy),
                 np.random.uniform(-jz, jz),
             ]
-        self._episode_eye = np.array(eye, dtype=float).tolist()
-        self._episode_up = up
+        self._episode_eye = np.array(self.eye, dtype=float).tolist()
+        self._episode_up = self.up
 
     def _get_eye_from_type(self, center_w, cam_type):
         """Returns eye position and up vector based on camera type."""
@@ -113,10 +105,12 @@ class Camera:
 
         # 1) Render BIG
         W_render, H_render = self.render_size
-        conn = p.getConnectionInfo().get("connectionMethod", p.DIRECT)
-        renderer = p.ER_BULLET_HARDWARE_OPENGL if conn == p.GUI else p.ER_TINY_RENDERER
+        # Always hardware renderer (EGL or GUI) – textures on deformables require it.
+        renderer = p.ER_BULLET_HARDWARE_OPENGL
 
-        # --- MuJoCo-like lighting ---
+        # Camera matrices
+        view_matrix, proj_matrix = self.get_view_projection_matrices(center_w)
+
         lights_cfg = self.randomization_kwargs["lights"]
         if self.randomization_kwargs["lights_randomization"]:
             # Randomized lights

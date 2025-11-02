@@ -5,13 +5,19 @@ import numpy as np
 import pybullet as p
 import pybullet_data
 
+from utils import egl_utils
+
 
 class PyBulletWorld:
     def __init__(self, has_viewer, timestep, cfg=None):
         self.has_viewer = has_viewer
         self.timestep = timestep
         self.cfg = cfg
+        # 1) Connect first
         self.client_id = p.connect(p.GUI if self.has_viewer else p.DIRECT)
+        # 2) Headless -> load EGL immediately (before any URDF/meshes)
+        if not self.has_viewer:
+            egl_utils.load_egl()
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
         self.table_id = None
