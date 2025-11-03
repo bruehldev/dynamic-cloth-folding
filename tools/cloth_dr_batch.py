@@ -14,19 +14,77 @@ This script calls the public functions from cloth_tools:
 It randomizes geometry, triangulation bias, UV transforms, and light noise.
 The goal is to create diverse-but-stable cloth meshes for sim/render DR.
 """
-from __future__ import annotations
-import os, argparse, time, math, random
-from dataclasses import dataclass
-from typing import Dict, Any, Tuple
 
-# Import the generator API from cloth_tools (same directory or on PYTHONPATH)
-try:
-    from cloth_tools import (
-        write_grid_obj, write_poncho_obj, write_skirt_obj,
-        write_scarf_obj, write_cape_obj
-    )
-except Exception as e:
-    raise SystemExit("ImportError: place cloth_dr_batch.py alongside cloth_tools.py.\n"+str(e))
+from __future__ import annotations
+
+import argparse
+import os
+import random
+import time
+from typing import Any, Dict
+
+from cloth_tools import (
+    write_cape_obj,
+    write_grid_obj,
+    write_poncho_obj,
+    write_scarf_obj,
+    write_skirt_obj,
+)
+
+from env.cloth_bullet import bullet_model_kwargs
+
+"""
+    "cloth": {
+        # mesh + UV for using your MuJoCo cloth in Bullet
+        "mesh_path": "assets/cloth/mj_square_n7_v49_f72_complex1.obj",
+        "uv": {
+            "repeat": [1, 1],
+            "rotate_deg": 0.0,
+            "offset_frac": [0.0, 0.0],
+            "repeat_x_range": [1, 1],
+            "repeat_y_range": [1, 1],
+            "rotate_deg_range": [0, 0],
+            "offset_frac_range": [[0.0, 0.0], [0.0, 0.0]],
+        },
+        # textures & colors
+        "texture_dir": "assets/cloth/textures",
+        "fallback_texture": "assets/cloth/cloth_z_up/cube.png",
+        "preprocess_textures": True,
+        "color_lo": [0.7, 0.7, 0.7, 1.0],
+        "color_hi": [1.0, 1.0, 1.0, 1.0],
+        # visible color when the cloth first spawns (before texture/tint DR)
+        "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
+        # physics-ish ranges used inside cloth_env_pybullet.py
+        "scale_range": [0.10, 0.20],  # used when DR is ON
+        "scale": 0.10,  # deterministic fallback used when DR is OFF
+        "scale_clearance_threshold": 0.15,
+        "friction_range": [0.5, 1.5],
+        "friction": 1.0,  # deterministic fallback if DR is OFF
+        "mass": 1.0,
+        "base_clearance": 0.05,
+        "extra_clearance_slope": 0.35,
+        "scale_clip_range": [0.10, 0.38],
+        "initial_pos": [0.5, 0.0],
+        "useNeoHookean": 0,
+        "useBendingSprings": 1,
+        "useMassSpring": 1,
+        "spring_k_range": [30.0, 60.0],
+        "spring_c_range": [0.08, 0.15],
+        "spring_k": 40.0,  # deterministic fallback if DR is OFF
+        "spring_c": 0.1,  # deterministic fallback if DR is OFF
+        "damping_all_dirs": 1,
+        "useSelfCollision": 1,
+        "useFaceContact": 1,
+        "collision_margin_range": [0.003, 0.010],
+        "collision_margin": 0.01,
+        "settle_steps": 60,
+        "thickness": 0.002,
+    },
+"""
+
+cloth_kwargs = bullet_model_kwargs._DEFAULTS["cloth"]
+texture_dir = cloth_kwargs["texture_dir"]
+
 
 # ============================
 # CONFIG — tweak here only
@@ -34,36 +92,38 @@ except Exception as e:
 CONFIG: Dict[str, Any] = {
     # Global knobs
     "object_name_prefix": "dr",
-    "mtllib": None,            # e.g. "fabrics.mtl" (only sets mtllib header)
-
+    "mtllib": None,  # e.g. "fabrics.mtl" (only sets mtllib header)
     # Type mix probabilities (weight > 0 means eligible)
     "type_weights": {
-        "grid":   1.0,
-        "poncho": 0.7,
-        "skirt":  0.7,
-        "scarf":  0.6,
-        "cape":   0.6,
+        "grid": 1.0,
+        "poncho": 0.0,
+        "skirt": 0.0,
+        "scarf": 0.0,
+        "cape": 0.0,
     },
-
     # ---- GRID (square cloth) ----
     "grid": {
-        "n_choices": [9, 13, 17, 21],       # vertices per side
-        "edge_range": (0.8, 1.2),           # half-extent meters
+        "n_choices": [9],  # vertices per side
+        "edge_range": (0.8, 1.2),  # half-extent meters
         "diagonal_choices": ["A", "B", "checker", "row-alt", "col-alt"],
         "shear_x_range": (-0.2, 0.2),
         "shear_y_range": (-0.1, 0.1),
         "rot_deg_range": (-15.0, 15.0),
         "scale_x_range": (0.85, 1.15),
         "scale_y_range": (0.85, 1.15),
-        "edge_ruffle_amp_range": (0.0, 0.015),   # meters
+        "edge_ruffle_amp_range": (0.0, 0.015),  # meters
         "edge_ruffle_freq_choices": [6, 8, 10, 12],
         "jitter_mm_range": (0.0, 3.0),
-        "uv_scale_u_range": (0.75, 1.35),
-        "uv_scale_v_range": (0.75, 1.35),
-        "uv_offset_u_range": (-0.2, 0.3),
-        "uv_offset_v_range": (-0.1, 0.4),
+        "uv_scale_u_range": (0.95, 1.05),
+        "uv_scale_v_range": (0.95, 1.05),
+        "uv_offset_u_range": (-0.05, 0.05),
+        "uv_offset_v_range": (-0.05, 0.05),
+        # for perfect uvs:
+        # "uv_scale_u_range": (1.0, 1.0),
+        # "uv_scale_v_range": (1.0, 1.0),
+        # "uv_offset_u_range": (0.0, 0.0),
+        # "uv_offset_v_range": (0.0, 0.0),
     },
-
     # ---- PONCHO (square with head hole) ----
     "poncho": {
         "n_choices": [33, 41],
@@ -76,11 +136,10 @@ CONFIG: Dict[str, Any] = {
         "uv_offset_v_range": (-0.1, 0.4),
         # Light noise applied post-hoc isn’t exposed in write_poncho_obj; keep modest values upstream if needed
     },
-
     # ---- SKIRT (annulus) ----
     "skirt": {
-        "na_choices": [48, 64, 96],   # angular samples
-        "nr_choices": [12, 16, 20],   # radial rings
+        "na_choices": [48, 64, 96],  # angular samples
+        "nr_choices": [12, 16, 20],  # radial rings
         "r_inner_range": (0.05, 0.15),
         "r_outer_range": (0.8, 1.2),
         "flare_pow_range": (0.8, 1.5),
@@ -88,7 +147,6 @@ CONFIG: Dict[str, Any] = {
         "uv_tile_u_range": (0.8, 2.0),
         "uv_tile_v_range": (0.8, 2.0),
     },
-
     # ---- SCARF (rectangle) ----
     "scarf": {
         "nx_choices": [33, 41, 49],
@@ -107,7 +165,6 @@ CONFIG: Dict[str, Any] = {
         "uv_wrap_prob": 0.5,
         "uv_match_like_path": None,
     },
-
     # ---- CAPE (square with cutouts) ----
     "cape": {
         "n_choices": [29, 33, 41],
@@ -128,20 +185,23 @@ CONFIG: Dict[str, Any] = {
     },
 }
 
+
 # ============================
 # Utilities
 # ============================
 def _rand_range(a: float, b: float) -> float:
     return random.uniform(a, b)
 
+
 def _rand_choice(seq):
     return random.choice(seq)
+
 
 def _pick_type(weights: Dict[str, float]) -> str:
     items = [(k, max(0.0, v)) for k, v in weights.items() if v > 0.0]
     names, w = zip(*items)
     total = sum(w)
-    probs = [wi/total for wi in w]
+    probs = [wi / total for wi in w]
     r = random.random()
     s = 0.0
     for name, p in zip(names, probs):
@@ -150,8 +210,10 @@ def _pick_type(weights: Dict[str, float]) -> str:
             return name
     return names[-1]
 
+
 def _stamp() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
+
 
 # ============================
 # Samplers per type
@@ -175,6 +237,7 @@ def sample_grid(cfg: Dict[str, Any]) -> Dict[str, Any]:
         uv_offset_v=_rand_range(*cfg["uv_offset_v_range"]),
     )
 
+
 def sample_poncho(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return dict(
         n=_rand_choice(cfg["n_choices"]),
@@ -182,6 +245,7 @@ def sample_poncho(cfg: Dict[str, Any]) -> Dict[str, Any]:
         hole_radius=_rand_range(*cfg["hole_radius_range"]),
         # UV: reuse grid ranges optionally by mapping later if you add flags
     )
+
 
 def sample_skirt(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return dict(
@@ -195,8 +259,11 @@ def sample_skirt(cfg: Dict[str, Any]) -> Dict[str, Any]:
         uv_tile_v=_rand_range(*cfg["uv_tile_v_range"]),
     )
 
+
 def sample_scarf(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    def flip(p): return random.random() < p
+    def flip(p):
+        return random.random() < p
+
     return dict(
         nx=_rand_choice(cfg["nx_choices"]),
         ny=_rand_choice(cfg["ny_choices"]),
@@ -215,14 +282,20 @@ def sample_scarf(cfg: Dict[str, Any]) -> Dict[str, Any]:
         uv_match_like=cfg["uv_match_like_path"],
     )
 
+
 def sample_cape(cfg):
-    def flip(p): return random.random() < p
+    def flip(p):
+        return random.random() < p
+
     cut = lambda: _rand_range(*cfg["cut_range"])
     return dict(
         n=_rand_choice(cfg["n_choices"]),
         half=_rand_range(*cfg["half_range"]),
         diagonal=_rand_choice(cfg["diagonal_choices"]),
-        cut_tl=cut(), cut_tr=cut(), cut_bl=cut(), cut_br=cut(),
+        cut_tl=cut(),
+        cut_tr=cut(),
+        cut_bl=cut(),
+        cut_br=cut(),
         hem_delete_prob=_rand_range(*cfg["hem_delete_prob_range"]),
         uv_scale_u=_rand_range(*cfg["uv_scale_u_range"]),
         uv_scale_v=_rand_range(*cfg["uv_scale_v_range"]),
@@ -236,15 +309,70 @@ def sample_cape(cfg):
         uv_match_like=cfg["uv_match_like_path"],
     )
 
+
 # ============================
 # Main batch
 # ============================
+
+MTL_TEMPLATE = """# Material Count: 1
+newmtl None
+Ns 94.117647
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd {texture_path}
+"""
+
+URDF_TEMPLATE = """<?xml version="1.0" ?>
+<robot name="{robot_name}">
+  <link name="baseLink">
+    <contact>
+      <lateral_friction value="1.0"/>
+      <rolling_friction value="0.0"/>
+      <contact_cfm value="0.0"/>
+      <contact_erp value="1.0"/>
+    </contact>
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+       <mass value="1.0"/>
+       <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+                <mesh filename="{mesh_filename}" scale="1 1 1"/>
+      </geometry>
+       <material name="white">
+        <color rgba="1 1 1 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>
+"""
+
+
 def main():
     ap = argparse.ArgumentParser(description="Batch generator for DR cloth using cloth_tools.")
     ap.add_argument("--out", required=True, help="Output directory for generated OBJs.")
-    ap.add_argument("--count", type=int, default=32, help="How many meshes of EACH TYPE to generate.")
+    ap.add_argument(
+        "--count", type=int, default=32, help="How many meshes of EACH TYPE to generate."
+    )
     ap.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
-    ap.add_argument("--prefix", default=None, help="Optional subfolder under --out (e.g. experiment/run name). If omitted, files go directly under --out/<type>/.")
+    ap.add_argument(
+        "--prefix",
+        default=None,
+        help="Optional subfolder under --out (e.g. experiment/run name). If omitted, files go directly under --out/<type>/.",
+    )
     args = ap.parse_args()
 
     if args.seed is not None:
@@ -252,10 +380,19 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
 
+    # Find all available textures
+    texture_exts = (".png", ".jpg", ".jpeg")
+    try:
+        all_textures = [f for f in os.listdir(texture_dir) if f.lower().endswith(texture_exts)]
+        if not all_textures:
+            raise FileNotFoundError
+    except FileNotFoundError:
+        print(f"Warning: No textures found in '{texture_dir}'. Cannot randomize textures.")
+        all_textures = None
+
     weights = CONFIG["type_weights"]
     enabled_types = [t for t, w in weights.items() if w > 0.0]  # <- define enabled types
     prefix = args.prefix  # subfolder name (may be None)
-    mtllib = CONFIG.get("mtllib", None)
 
     stamp = _stamp()
 
@@ -271,7 +408,34 @@ def main():
             # filename no longer includes prefix; prefix is a folder
             name = f"{t}_{stamp}_{idx:04d}"
             subdir = os.path.join(base_out, t)
-            dst = os.path.join(subdir, f"{name}.obj")
+            obj_dir = os.path.join(subdir, name)
+            os.makedirs(obj_dir, exist_ok=True)
+
+            obj_filename = f"{name}.obj"
+            dst = os.path.join(obj_dir, obj_filename)
+
+            # Generate and write the MTL file
+            mtl_filename = f"{name}.mtl"
+            mtl_path = os.path.join(obj_dir, mtl_filename)
+
+            texture_name = "cube.png"  # Fallback
+            if all_textures:
+                chosen_texture_file = random.choice(all_textures)
+                # Get relative path from the new obj_dir to the texture file
+                texture_path_abs = os.path.abspath(os.path.join(texture_dir, chosen_texture_file))
+                obj_dir_abs = os.path.abspath(obj_dir)
+                texture_name = os.path.relpath(texture_path_abs, obj_dir_abs)
+
+            with open(mtl_path, "w") as f:
+                f.write(MTL_TEMPLATE.format(texture_path=texture_name))
+
+            # Generate and write the URDF file
+            urdf_filename = f"{name}.urdf"
+            urdf_path = os.path.join(obj_dir, urdf_filename)
+            with open(urdf_path, "w") as f:
+                f.write(URDF_TEMPLATE.format(robot_name=name, mesh_filename=obj_filename))
+
+            mtllib = mtl_filename  # Set mtllib for the obj file
 
             if t == "grid":
                 p = sample_grid(CONFIG["grid"])

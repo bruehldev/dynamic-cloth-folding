@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import os
+import random
 import tempfile
 
 import numpy as np
@@ -64,12 +65,40 @@ class DeformableCloth:
             spring_c = float(self.cloth_cfg["spring_c"])
             collision_margin = float(self.cloth_cfg["collision_margin"])
 
+        # --- Select cloth mesh based on randomization ---
+        mesh_path_to_load = None
+        if self.randomization_kwargs["materials_randomization"]:
+            obj_dir = self.cloth_cfg.get("obj_dir")
+            if obj_dir and os.path.isdir(obj_dir):
+                try:
+                    subdirs = [
+                        d for d in os.listdir(obj_dir) if os.path.isdir(os.path.join(obj_dir, d))
+                    ]
+                    if subdirs:
+                        chosen_subdir_name = random.choice(subdirs)
+                        obj_filename = f"{chosen_subdir_name}.obj"
+                        mesh_path_to_load = os.path.join(obj_dir, chosen_subdir_name, obj_filename)
+                except OSError:
+                    self.logger.log(f"Warning: Could not read obj_dir '{obj_dir}'")
+
+        if not mesh_path_to_load or not os.path.isfile(mesh_path_to_load):
+            fallback_dir = self.cloth_cfg.get("obj_dir_fallback")
+            if fallback_dir and os.path.isdir(fallback_dir):
+                # Assumes the obj file is named after the folder, e.g., 'cloth_z_up/cloth_z_up.obj'
+                dir_name = os.path.basename(fallback_dir)
+                mesh_path_to_load = os.path.join(fallback_dir, f"{dir_name}.obj")
+            else:  # Final fallback
+                mesh_path_to_load = self.cloth_cfg["mesh_path"]
+
+        self.mesh_path = mesh_path_to_load
+        self.logger.log(f"LOG:cloth_mesh_path: {self.mesh_path}")
+
         def _load(scale_val):
             # Hard render guard: ensure GUI can't draw while spawning the soft body
             with contextlib.suppress(Exception):
                 p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             body_id = p.loadSoftBody(
-                self.cloth_cfg["mesh_path"],
+                self.mesh_path,
                 basePosition=base_position,
                 scale=scale_val,
                 mass=self.cloth_cfg["mass"],
@@ -125,7 +154,6 @@ class DeformableCloth:
         self._texture_id = None
 
         # keep original mesh path for MTL parsing / logging
-        self.mesh_path = self.cloth_cfg["mesh_path"]
         self.mesh_dir = os.path.dirname(self.mesh_path) if isinstance(self.mesh_path, str) else None
 
         # cache episode parameters for DR/obs parity with MuJoCo
@@ -282,12 +310,15 @@ class DeformableCloth:
         fixed_path = cloth_cfg["fallback_texture"]
 
         # If no explicit fallback, try .mtl's map_Kd next to the mesh
-        fixed_path = self._mtl_map_kd() or fixed_path
+        # fixed_path = self._mtl_map_kd() or fixed_path
+        fixed_path = fixed_path
 
         tex_path = None
         # Use the top-level materials_randomization
         if rk["texture_randomization"]:
             tex_path = self._pick_random_texture(template_dir)
+        print("tex_path")
+        print(tex_path)
 
         if not tex_path:
             tex_path = fixed_path

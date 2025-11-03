@@ -194,8 +194,6 @@ class BulletClothEnv_:
 
         # Pass logger down so cloth can report texture DR
 
-        # Appearance (textures + tint) handled by DeformableCloth
-        self.cloth.apply_appearance(self.kwargs)
         # Wait for cloth to settle
         for _ in range(cloth_cfg["settle_steps"]):
             self.world.step()
