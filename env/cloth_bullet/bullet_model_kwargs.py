@@ -65,9 +65,8 @@ _DEFAULTS = {
     "mujoco_size_lock": True,  # keep Bullet cloth visually consistent with MuJoCo cloth_size
     # per-object sections
     "cloth": {
-        # mesh + UV for using your MuJoCo cloth in Bullet
-        "mesh_path": "assets/cloth/mj_square_n7_v49_f72_complex1.obj",
         "uv": {
+            # cam be removed
             "repeat": [1, 1],
             "rotate_deg": 0.0,
             "offset_frac": [0.0, 0.0],
@@ -80,14 +79,12 @@ _DEFAULTS = {
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
         "obj_dir_fallback": "assets/cloth/cloth_z_up",
-        "fallback_texture": "assets/cloth/cloth_z_up/cube.png",
-        "preprocess_textures": True,
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
-        "scale_range": [0.10, 0.20],  # used when DR is ON
+        "scale_range": [0.10, 0.15],  # used when DR is ON
         "scale": 0.10,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 1.5],
@@ -272,7 +269,6 @@ def make_bullet_randomization_kwargs(
     assert "spring_c" in cfg["cloth"]
     assert "collision_margin_range" in cfg["cloth"]
     assert "collision_margin" in cfg["cloth"]
-    assert "mesh_path" in cfg["cloth"]
     assert "type" in cfg["camera_config"]
     assert "train_camera_fovy" in cfg["camera_config"]
     assert "fovy_range" in cfg["camera_config"]
@@ -310,7 +306,6 @@ def make_bullet_randomization_kwargs(
     assert "GaussianBlur" in cfg["albumentations_config"]
 
     # appearance / UV preprocessing
-    assert "preprocess_textures" in cfg["cloth"]
     assert "uv" in cfg["cloth"]
     for k in (
         "repeat",

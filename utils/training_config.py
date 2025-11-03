@@ -76,11 +76,8 @@ class UVConfig(TypedDict, total=False):
 
 
 class ClothConfig(TypedDict, total=False):
-    mesh_path: str
     uv: UVConfig
     texture_dir: str
-    fallback_texture: str
-    preprocess_textures: bool
     color_lo: Vec4
     color_hi: Vec4
     scale_range: Vec2

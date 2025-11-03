@@ -33,55 +33,6 @@ from cloth_tools import (
 
 from env.cloth_bullet import bullet_model_kwargs
 
-"""
-    "cloth": {
-        # mesh + UV for using your MuJoCo cloth in Bullet
-        "mesh_path": "assets/cloth/mj_square_n7_v49_f72_complex1.obj",
-        "uv": {
-            "repeat": [1, 1],
-            "rotate_deg": 0.0,
-            "offset_frac": [0.0, 0.0],
-            "repeat_x_range": [1, 1],
-            "repeat_y_range": [1, 1],
-            "rotate_deg_range": [0, 0],
-            "offset_frac_range": [[0.0, 0.0], [0.0, 0.0]],
-        },
-        # textures & colors
-        "texture_dir": "assets/cloth/textures",
-        "fallback_texture": "assets/cloth/cloth_z_up/cube.png",
-        "preprocess_textures": True,
-        "color_lo": [0.7, 0.7, 0.7, 1.0],
-        "color_hi": [1.0, 1.0, 1.0, 1.0],
-        # visible color when the cloth first spawns (before texture/tint DR)
-        "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
-        # physics-ish ranges used inside cloth_env_pybullet.py
-        "scale_range": [0.10, 0.20],  # used when DR is ON
-        "scale": 0.10,  # deterministic fallback used when DR is OFF
-        "scale_clearance_threshold": 0.15,
-        "friction_range": [0.5, 1.5],
-        "friction": 1.0,  # deterministic fallback if DR is OFF
-        "mass": 1.0,
-        "base_clearance": 0.05,
-        "extra_clearance_slope": 0.35,
-        "scale_clip_range": [0.10, 0.38],
-        "initial_pos": [0.5, 0.0],
-        "useNeoHookean": 0,
-        "useBendingSprings": 1,
-        "useMassSpring": 1,
-        "spring_k_range": [30.0, 60.0],
-        "spring_c_range": [0.08, 0.15],
-        "spring_k": 40.0,  # deterministic fallback if DR is OFF
-        "spring_c": 0.1,  # deterministic fallback if DR is OFF
-        "damping_all_dirs": 1,
-        "useSelfCollision": 1,
-        "useFaceContact": 1,
-        "collision_margin_range": [0.003, 0.010],
-        "collision_margin": 0.01,
-        "settle_steps": 60,
-        "thickness": 0.002,
-    },
-"""
-
 cloth_kwargs = bullet_model_kwargs._DEFAULTS["cloth"]
 texture_dir = cloth_kwargs["texture_dir"]
 
