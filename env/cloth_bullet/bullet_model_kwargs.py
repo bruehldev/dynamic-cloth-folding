@@ -207,6 +207,9 @@ _DEFAULTS = {
         "fail_reward": -1.0,
         "extra_reward": 1.0,
     },
+    "debug_log_projection": True,  # print to terminal
+    "debug_save_projection_json": True,  # also save JSON files next to your runs
+    "debug_draw_named_corners": True,  # draws named-corner dots too (magenta)
 }
 
 

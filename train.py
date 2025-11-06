@@ -56,10 +56,11 @@ def experiment(variant: TrainingConfigBase):
             randomization_kwargs=variant["randomization_kwargs"],
             logger=rlkit_logger,
         )
-        randomized_eval_env = eval_env
+        wrapped_eval_env = wrappers.NormalizedBoxEnv(eval_env)
+        randomized_eval_env = wrapped_eval_env
         env_keys, env_dims = bullet_utils.get_keys_and_dims(
             variant,
-            wrappers.NormalizedBoxEnv(eval_env),
+            wrapped_eval_env,
         )
 
     logger.debug(f"PHYSICS backend: {BACKEND}, Eval Env class: {type(eval_env).__name__}")

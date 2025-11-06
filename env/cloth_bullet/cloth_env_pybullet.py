@@ -1,8 +1,10 @@
+import json
 import os
 from collections import deque
 from multiprocessing import current_process
 from typing import Any, Optional
 
+import cv2
 import gym
 import numpy as np
 import psutil
@@ -247,7 +249,7 @@ class BulletClothEnv_:
         )
 
         # Capture initial image (viewer can stay off; camera grabs directly)
-        img = self.camera.capture_image(self._camera_target)
+        img = self.get_image_obs()
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
@@ -323,7 +325,7 @@ class BulletClothEnv_:
             self.world.step()
 
             if i == image_obs_substep_idx:
-                self.frame_stack.append(self.camera.capture_image(self._camera_target))
+                self.frame_stack.append(self.get_image_obs())
 
         obs = self.get_obs()
         reward, done, info = self._get_reward_and_done(obs, raw_action)
@@ -419,37 +421,136 @@ class BulletClothEnv_:
         # print(f"Debug: corner_1 distance: {info['corner_1']}")
         return reward, done, info
 
-    def _get_corner_image_positions(self):
-        """Projects cloth corner vertices into normalized image coordinates."""
-        w, h = self.image_size
-        view_matrix, proj_matrix = self.camera.get_view_projection_matrices(self._camera_target)
-        view_proj_matrix = np.array(proj_matrix).reshape(4, 4) @ np.array(view_matrix).reshape(4, 4)
+    # ---------- DEBUG UTILITIES ----------
+    def _debug_log(self, tag, data):
+        """Print and forward to logger in a compact JSON form."""
+        try:
+            msg = f"{tag}: " + json.dumps(data, separators=(",", ":"), default=float)
+        except Exception:
+            msg = f"{tag}: {data}"
+        if self.kwargs.get("debug_log_projection", False):
+            print(msg, flush=True)
+        # Forward to user logger if provided
+        try:
+            self.logger.log(msg)
+        except Exception:
+            pass
 
-        corners_w = self.cloth.get_positions_W()
-        corner_names = ["0", "1", "2", "3"]
-        flattened_corners = []
+    def _project_points_uv(self, points_W, label="points"):
+        """
+        Project a list of world points with the SAME camera + crop as render_rgb().
+        Returns: dict with per-point internals + final normalized UVs.
+        """
+        # Camera & crop params exactly like render_rgb()
+        cam_setup = self.camera.get_stable_camera_setup(self._camera_target)
+        crop = self.camera.get_render_crop_params()
+        view, proj = self.camera.get_stable_view_projection_matrices(self._camera_target)
 
-        for name in corner_names:
-            v_name = self.cloth.corner_v_names[name]
-            pos_w = corners_w[v_name]
-            pos_h = np.array([pos_w[0], pos_w[1], pos_w[2], 1.0])
+        V = np.array(view, dtype=np.float64).reshape(4, 4).T
+        P = np.array(proj, dtype=np.float64).reshape(4, 4).T
+        VP = P @ V
 
-            # Project to clip space
-            clip = view_proj_matrix @ pos_h
-            if abs(clip[3]) < 1e-6:
-                flattened_corners.extend([0.0, 0.0])
+        W_render, H_render = crop["W_render"], crop["H_render"]
+        W_out, H_out = crop["W_out"], crop["H_out"]
+        x0, y0 = crop["x0"], crop["y0"]
+
+        per_point = []
+        uv = []
+        for x, y, z in points_W:
+            pos_h = np.array([x, y, z, 1.0], dtype=np.float64)
+            clip = VP @ pos_h
+            if abs(clip[3]) < 1e-12:
+                per_point.append({"world": [x, y, z], "invalid": True})
+                uv.extend([0.0, 0.0])
                 continue
+            ndc = (clip[:3] / clip[3]).astype(np.float64)  # (-1..1)
+            x_full = (ndc[0] + 1.0) * 0.5 * W_render
+            y_full = (1.0 - ndc[1]) * 0.5 * H_render  # flip Y
+            x_crop = x_full - x0
+            y_crop = y_full - y0
+            u = float(np.clip(x_crop / max(1, W_out), 0.0, 1.0))
+            v = float(np.clip(y_crop / max(1, H_out), 0.0, 1.0))
+            per_point.append(
+                {
+                    "world": [float(x), float(y), float(z)],
+                    "clip": [float(c) for c in clip.tolist()],
+                    "ndc": [float(n) for n in ndc.tolist()],
+                    "pix_full": [float(x_full), float(y_full)],
+                    "pix_crop": [float(x_crop), float(y_crop)],
+                    "uv_cropped": [u, v],
+                }
+            )
+            uv.extend([u, v])
 
-            # NDC space
-            ndc = clip[:3] / clip[3]
+        out = {
+            "label": label,
+            "camera": cam_setup,
+            "crop": crop,
+            "uv": uv,
+            "points": per_point,
+        }
+        return out
 
-            # Image space (0 to 1)
-            u = (ndc[0] + 1) / 2
-            v = (1 - ndc[1]) / 2  # Y is inverted
+    # ---------- CORNER UVs (kept as the API for drawing) ----------
+    def _get_corner_image_positions(self):
+        """
+        Return [u0,v0, u1,v1, u2,v2, u3,v3] in [0,1] for the cloth's corners.
+        Logs both the NAMED-corners projection and the PCA-snapped projection.
+        """
+        pos_dict = self.cloth.get_positions_W()
+        pts = np.array(list(pos_dict.values()), dtype=np.float64)  # [N,3]
+        XY = pts[:, :2]
 
-            flattened_corners.extend([u, v])
+        # ----- A) NAMED corners (exact vertices) -----
+        names = ["0", "1", "2", "3"]
+        named_pts = [pos_dict[self.cloth.corner_v_names[n]] for n in names]
+        named_log = self._project_points_uv(named_pts, label="named_corners")
 
-        return np.array(flattened_corners, dtype=np.float32)
+        # ----- B) PCA-snapped corners (heuristic) -----
+        mean = XY.mean(axis=0)
+        C = np.cov((XY - mean).T)
+        eigvals, eigvecs = np.linalg.eigh(C)
+        axes = eigvecs[:, np.argsort(eigvals)[::-1]]  # principal axes (2x2)
+        coords = (XY - mean) @ axes
+        umin, vmin = coords.min(axis=0)
+        umax, vmax = coords.max(axis=0)
+        rect_uv = np.array(
+            [[umin, vmin], [umax, vmin], [umax, vmax], [umin, vmax]], dtype=np.float64
+        )
+        rect_xy = rect_uv @ axes.T + mean
+        # snap to nearest real vertex
+        idxs = [int(np.argmin(np.sum((XY - cxy) ** 2, axis=1))) for cxy in rect_xy]
+        pca_pts = pts[idxs].tolist()
+        pca_log = self._project_points_uv(pca_pts, label="pca_corners")
+
+        # Log both (terminal + optional JSON)
+        debug_blob = {
+            "step": int(getattr(self, "current_step", 0)),
+            "camera_target": [float(x) for x in self._camera_target],
+            "named": named_log,
+            "pca": pca_log,
+        }
+        self._debug_log("CORNER_PROJECTION", debug_blob)
+        if self.kwargs.get("debug_save_projection_json", False) and self.save_folder:
+            try:
+                os.makedirs(os.path.join(self.save_folder, "debug"), exist_ok=True)
+                with open(
+                    os.path.join(
+                        self.save_folder,
+                        "debug",
+                        f"corner_proj_step_{int(self.current_step):06d}.json",
+                    ),
+                    "w",
+                ) as f:
+                    json.dump(debug_blob, f)
+            except Exception:
+                pass
+
+        # By default, return the NAMED-corner UVs for drawing
+        return np.array(named_log["uv"], dtype=np.float32)
+
+    def get_image_obs(self):
+        return self.camera.policy_image(self._camera_target)
 
     def get_obs(self):
         cloth_pos_I = self.get_cloth_position_I()
@@ -545,11 +646,56 @@ class BulletClothEnv_:
         positions_W = self.cloth.get_positions_W()
         return {k: (v - self.relative_origin) for k, v in positions_W.items()}
 
+    def get_masked_image(self, point_size=5, greyscale=False, aux_output=None):
+        img = self.camera.render_rgb(self._camera_target)  # DR-free base
+        h, w = img.shape[:2]
+
+        uv = self._get_corner_image_positions()  # [u0,v0,u1,v1,...] in [0,1]
+        for i in range(0, len(uv), 2):
+            u_pix = int(np.clip(uv[i] * w, 0, w - 1))  # <-- no flip
+            v_pix = int(np.clip(uv[i + 1] * h, 0, h - 1))
+            cv2.circle(img, (u_pix, v_pix), int(point_size), (255, 0, 0), -1)
+
+        if aux_output is not None:
+            flat = aux_output.flatten()
+            for i in range(0, min(len(flat), 8), 2):
+                au = int(np.clip(flat[i] * w, 0, w - 1))
+                av = int(np.clip(flat[i + 1] * h, 0, h - 1))
+                cv2.circle(img, (au, av), int(point_size), (0, 255, 0), -1)
+
+        if greyscale:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        return img
+
+    def _normalize_aux(flat, w, h):
+        flat = np.asarray(flat, dtype=np.float32).flatten()
+        # Log shape & stats once per step
+        print(f"[aux_debug] len={len(flat)}  min={flat.min():.3f}  max={flat.max():.3f}")
+
+        # Case A: looks like pixel coords -> convert to [0,1]
+        if flat.max() > 1.5 or flat.min() < -1.5:
+            out = flat.copy()
+            for i in range(0, len(out), 2):
+                out[i] = np.clip(out[i] / max(1.0, w), 0.0, 1.0)  # u
+                out[i + 1] = np.clip(out[i + 1] / max(1.0, h), 0.0, 1.0)  # v
+            return out
+
+        # Case B: looks like [-1,1] -> map to [0,1]
+        if flat.min() < -0.01:
+            return np.clip(0.5 * (flat + 1.0), 0.0, 1.0)
+
+        # Case C: already [0,1]
+        return np.clip(flat, 0.0, 1.0)
+
     def capture_images(self, aux_output=None):
-        """Captures an image, returning it 5 times for API compatibility."""
-        img = self.camera.capture_image(self._camera_target)
-        img = (img.reshape(self.image_size + (-1,)) * 255).astype(np.uint8)
-        return (img.copy(), img.copy(), img.copy(), img.copy(), img.copy())
+        if aux_output is None:
+            print("[Bullet] capture_images: aux_output is None", flush=True)
+        # 0: corner overlay (RGB)
+        corner = self.get_masked_image(point_size=5, greyscale=False, aux_output=aux_output)
+        # 1: eval RGB (no DR)
+        eval_rgb = self.camera.render_rgb(self._camera_target)
+        # Placeholders for the remaining three (keep parity: real RGBs, no DR)
+        return (corner.copy(), eval_rgb.copy(), eval_rgb.copy(), eval_rgb.copy(), eval_rgb.copy())
 
     def get_trajectory_log_entry(self):
         """Returns a dictionary of info for logging, matching original keys."""
