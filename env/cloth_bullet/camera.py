@@ -158,23 +158,15 @@ class Camera:
         img = (img.astype(np.float32) / 255.0).clip(0.0, 1.0)
         return img.flatten().copy()
 
-    def render_rgb(self, center_w):
+    def render_rgb(self, center_w, cam_type="default"):
         """
         Stable renderer for logging/visualization.
         - NO domain randomization (fixed cam + lights)
         - Returns cropped RGB uint8 image (HxWx3)
         """
         W_render, H_render = self.render_size
-        # Fixed camera (use "default" spec as an OFFSET from current center)
-        cam_spec = self._cam_cfg["types"]["default"]
-        eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
-        up = cam_spec["up"]
-        fov = float(self._cam_cfg["train_camera_fovy"])
-        aspect = W_render / H_render
-        view_matrix = p.computeViewMatrix(eye, np.asarray(center_w, dtype=float).tolist(), up)
-        proj_matrix = p.computeProjectionMatrixFOV(
-            fov, aspect, float(self._cam_cfg["near_clip"]), float(self._cam_cfg["far_clip"])
-        )
+        # Same stable camera path as get_stable_view_projection_matrices()
+        view_matrix, proj_matrix = self.get_stable_view_projection_matrices(center_w, cam_type)
 
         # Fixed lights (never randomized)
         lights_cfg = self.randomization_kwargs["lights"]
@@ -199,13 +191,43 @@ class Camera:
         y0 = (H_render - H_out) // 2
         return img[y0 : y0 + H_out, x0 : x0 + W_out, :].copy()
 
-    def get_stable_view_projection_matrices(self, center_w):
+    def render_rgb_full(self, center_w, cam_type="default"):
+        """
+        Stable renderer (NO DR) that returns the FULL render buffer size
+        (W_render x H_render), without the center-crop used for policy images.
+        Matches the camera + lighting of render_rgb().
+        """
+        # Use the same stable camera setup as render_rgb(), but no crop
+        view_matrix, proj_matrix = self.get_stable_view_projection_matrices(center_w, cam_type)
+
+        # Fixed lights (never randomized)
+        lights_cfg = self.randomization_kwargs["lights"]
+        ldir = lights_cfg["direction"]
+        lcol = lights_cfg["color"]
+        shadow = int(lights_cfg["shadows"])
+
+        W_render, H_render = self.render_size
+        _, _, rgba, _, _ = p.getCameraImage(
+            W_render,
+            H_render,
+            view_matrix,
+            proj_matrix,
+            shadow=shadow,
+            lightDirection=ldir,
+            lightColor=lcol,
+            renderer=self._renderer,
+        )
+        img = np.reshape(rgba, (H_render, W_render, 4))[:, :, :3].astype("uint8")
+        return img.copy()
+
+    def get_stable_view_projection_matrices(self, center_w, cam_type="default"):
         """
         View/projection matrices that exactly match render_rgb() (no DR).
         Use these for projecting world points onto the 'real' RGB frame.
         """
         W_render, H_render = self.render_size
-        cam_spec = self._cam_cfg["types"]["default"]
+        cam_spec = self._cam_cfg["types"][cam_type]
+        # Stable path: treat eye as an OFFSET from the current center (keeps eval view on the cloth)
         eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
         up = cam_spec["up"]
         fov = float(self._cam_cfg["train_camera_fovy"])
@@ -215,6 +237,18 @@ class Camera:
             fov, aspect, float(self._cam_cfg["near_clip"]), float(self._cam_cfg["far_clip"])
         )
         return view, proj
+
+    def get_stable_camera_setup(self, center_w, cam_type="default"):
+        """Return eye, up, fov, aspect, near, far for a given stable cam_type."""
+        W_render, H_render = self.render_size
+        cam_spec = self._cam_cfg["types"][cam_type]
+        eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
+        up = cam_spec["up"]
+        fov = float(self._cam_cfg["train_camera_fovy"])
+        aspect = W_render / H_render
+        near = float(self._cam_cfg["near_clip"])
+        far = float(self._cam_cfg["far_clip"])
+        return {"eye": eye, "up": up, "fov": fov, "aspect": aspect, "near": near, "far": far}
 
     def render_rgb_dr(self, center_w):
         """
@@ -277,18 +311,6 @@ class Camera:
             "x0": int(x0),
             "y0": int(y0),
         }
-
-    def get_stable_camera_setup(self, center_w):
-        """Return eye, up, fov, aspect, near, far that match render_rgb()."""
-        W_render, H_render = self.render_size
-        cam_spec = self._cam_cfg["types"]["default"]
-        eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
-        up = cam_spec["up"]
-        fov = float(self._cam_cfg["train_camera_fovy"])
-        aspect = W_render / H_render
-        near = float(self._cam_cfg["near_clip"])
-        far = float(self._cam_cfg["far_clip"])
-        return {"eye": eye, "up": up, "fov": fov, "aspect": aspect, "near": near, "far": far}
 
     def set_debug_camera(self, center_w, cam_type="default"):
         """Sets the GUI debug camera to look at a target, with ENV var overrides."""

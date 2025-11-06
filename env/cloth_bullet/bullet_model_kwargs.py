@@ -45,7 +45,7 @@ _DEFAULTS = {
             "side": {"eye": [-0.4, -0.7, 0.65], "up": [0.0, 0.0, 1.0]},
             "front": {"eye": [0.5, -1.0, 0.75], "up": [0.0, 0.0, 1.0]},
             "up": {"eye": [0.5, -0.7, 1.1], "up": [0.0, 0.0, 1.0]},
-            "full": {"eye": [1.022, -0.897, 0.739], "up": [0.0, 0.0, 1.0]},
+            "eval_camera": {"eye": [1.022, -0.897, 0.739], "up": [0.0, 0.0, 1.0]},
         },
     },
     # default debug viewer camera (used only when has_viewer=True)
