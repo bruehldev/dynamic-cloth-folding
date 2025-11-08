@@ -263,13 +263,17 @@ class Camera:
         far = float(self._cam_cfg["far_clip"])
         return {"eye": eye, "up": up, "fov": fov, "aspect": aspect, "near": near, "far": far}
 
-    def render_rgb_dr(self, center_w):
+    def render_rgb_dr(self, center_w, size=None):
         """
         DR renderer used by the policy path.
         - Uses episode-randomized camera (begin_episode)
         - Optional light randomization
         """
-        W_render, H_render = self.render_size
+        # Render directly at the requested resolution (no crop).
+        if size is None:
+            W_out, H_out = self.image_size
+        else:
+            W_out, H_out = size
         view_matrix, proj_matrix = self.get_view_projection_matrices(center_w)
         lights_cfg = self.randomization_kwargs["lights"]
         if self.randomization_kwargs["lights_randomization"]:
@@ -282,8 +286,8 @@ class Camera:
             shadow = int(lights_cfg["shadows"])
 
         _, _, rgba, _, _ = p.getCameraImage(
-            W_render,
-            H_render,
+            int(W_out),
+            int(H_out),
             view_matrix,
             proj_matrix,
             shadow=shadow,
@@ -291,11 +295,8 @@ class Camera:
             lightColor=lcol,
             renderer=self._renderer,
         )
-        img = np.reshape(rgba, (H_render, W_render, 4))[:, :, :3].astype("uint8")
-        W_out, H_out = self.image_size
-        x0 = (W_render - W_out) // 2
-        y0 = (H_render - H_out) // 2
-        return img[y0 : y0 + H_out, x0 : x0 + W_out, :].copy()
+        img = np.reshape(rgba, (int(H_out), int(W_out), 4))[:, :, :3].astype("uint8")
+        return img.copy()
 
     def policy_image(self, center_w):
         # Use DR path for policy-only rendering
@@ -310,18 +311,15 @@ class Camera:
     ### Debugging utilities ###
 
     def get_render_crop_params(self):
-        """Return the full render size and the center-crop used by render_rgb()."""
+        """Cropping disabled: identity mapping (use full FOV everywhere)."""
         W_render, H_render = self.render_size
-        W_out, H_out = self.image_size
-        x0 = (W_render - W_out) // 2
-        y0 = (H_render - H_out) // 2
         return {
             "W_render": int(W_render),
             "H_render": int(H_render),
-            "W_out": int(W_out),
-            "H_out": int(H_out),
-            "x0": int(x0),
-            "y0": int(y0),
+            "W_out": int(W_render),
+            "H_out": int(H_render),
+            "x0": 0,
+            "y0": 0,
         }
 
     def set_debug_camera(self, center_w, cam_type="default"):

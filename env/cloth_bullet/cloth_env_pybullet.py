@@ -337,6 +337,12 @@ class BulletClothEnv_:
 
         self.current_step += 1
 
+        try:
+            if self.has_viewer:
+                self.camera.print_gui_camera_as_type(name=f"step_{self.current_step:04d}")
+        except Exception:
+            pass
+
         for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):
             if np.any(np.isnan(obs[k])):
                 raise ValueError(f"NaN in obs['{k}'] detected!")
@@ -420,90 +426,71 @@ class BulletClothEnv_:
         # print(f"Debug: corner_1 distance: {info['corner_1']}")
         return reward, done, info
 
-    def _project_points_uv(
-        self, points_W, label="points", cam_type="default", crop_to_policy=False
-    ):
+    def _project_points_uv(self, points_W, label="points", cam_type="default"):
         """
-        Project a list of world points with the SAME camera + crop as render_rgb().
-        Returns: dict with per-point internals + final normalized UVs.
+        Project world points to normalized UVs [0,1] using the SAME camera as the image.
+        For 'default' views, use the episode/policy camera. For 'eval_camera', use the stable view.
         """
-        # Camera & crop params exactly like render_rgb()
-        cam_setup = self.camera.get_stable_camera_setup(
-            self._camera_target, cam_type=cam_type, crop_to_policy=crop_to_policy
-        )
-        crop = self.camera.get_render_crop_params()
-        view, proj = self.camera.get_stable_view_projection_matrices(
-            self._camera_target, cam_type=cam_type, crop_to_policy=crop_to_policy
-        )
+        if cam_type == "eval_camera":
+            cam_setup = self.camera.get_stable_camera_setup(self._camera_target, cam_type=cam_type)
+            view, proj = self.camera.get_stable_view_projection_matrices(
+                self._camera_target, cam_type=cam_type
+            )
+        else:
+            cam_setup = {"type": "episode"}
+            view, proj = self.camera.get_view_projection_matrices(self._camera_target)
 
         V = np.array(view, dtype=np.float64).reshape(4, 4).T
         P = np.array(proj, dtype=np.float64).reshape(4, 4).T
         VP = P @ V
 
-        W_render, H_render = crop["W_render"], crop["H_render"]
-        W_out, H_out = crop["W_out"], crop["H_out"]
-        x0, y0 = crop["x0"], crop["y0"]
+        # Normalize by the target image buffer we drew into
+        W_render, H_render = self.camera.render_size  # 500x500 for big, 100x100 for small
 
         per_point = []
-        uv_cropped = []
         uv_full = []
         for x, y, z in points_W:
             pos_h = np.array([x, y, z, 1.0], dtype=np.float64)
             clip = VP @ pos_h
             if abs(clip[3]) < 1e-12:
                 per_point.append({"world": [float(x), float(y), float(z)], "invalid": True})
-                uv_cropped.extend([0.0, 0.0])
                 uv_full.extend([0.0, 0.0])
                 continue
             ndc = (clip[:3] / clip[3]).astype(np.float64)  # (-1..1)
-            x_full = (ndc[0] + 1.0) * 0.5 * W_render
-            y_full = (1.0 - ndc[1]) * 0.5 * H_render  # flip Y
-            x_crop = x_full - x0
-            y_crop = y_full - y0
-            u = float(np.clip(x_crop / max(1, W_out), 0.0, 1.0))
-            v = float(np.clip(y_crop / max(1, H_out), 0.0, 1.0))
-            u_full = float(np.clip(x_full / max(1, W_render), 0.0, 1.0))
-            v_full = float(np.clip(y_full / max(1, H_render), 0.0, 1.0))
+            x_pix = (ndc[0] + 1.0) * 0.5 * W_render
+            y_pix = (1.0 - ndc[1]) * 0.5 * H_render  # flip Y
+            u_full = float(np.clip(x_pix / max(1, W_render), 0.0, 1.0))
+            v_full = float(np.clip(y_pix / max(1, H_render), 0.0, 1.0))
             per_point.append(
                 {
                     "world": [float(x), float(y), float(z)],
                     "clip": [float(c) for c in clip.tolist()],
                     "ndc": [float(n) for n in ndc.tolist()],
-                    "pix_full": [float(x_full), float(y_full)],
-                    "pix_crop": [float(x_crop), float(y_crop)],
-                    "uv_cropped": [u, v],
+                    "pix_full": [float(x_pix), float(y_pix)],
                     "uv_full": [u_full, v_full],
                 }
             )
-            uv_cropped.extend([u, v])
             uv_full.extend([u_full, v_full])
 
         out = {
             "label": label,
             "camera": cam_setup,
-            "crop": crop,
-            "uv_cropped": uv_cropped,
             "uv_full": uv_full,
             "points": per_point,
         }
         return out
 
-    # ---------- CORNER UVs (kept as the API for drawing) ----------
-    def _get_corner_image_positions(
-        self, cam_type="default", space="cropped", crop_to_policy=False
-    ):
+    # ---------- CORNER UVs ----------
+    def _get_corner_image_positions(self, cam_type="default"):
         """
         Return [u0,v0, u1,v1, u2,v2, u3,v3] in [0,1] for the cloth's corners
-        using the *named* cloth corner vertices (parity with MuJoCo).
+        using the stable camera (no crop).
         """
         pos_dict = self.cloth.get_positions_W()
         names = ["0", "1", "2", "3"]
         named_pts = [pos_dict[self.cloth.corner_v_names[n]] for n in names]
-        named_log = self._project_points_uv(
-            named_pts, label="named_corners", cam_type=cam_type, crop_to_policy=crop_to_policy
-        )
-        key = "uv_full" if space == "full" else "uv_cropped"
-        return np.array(named_log[key], dtype=np.float32)
+        named_log = self._project_points_uv(named_pts, label="named_corners", cam_type=cam_type)
+        return np.array(named_log["uv_full"], dtype=np.float32)
 
     def get_image_obs(self):
         return self.camera.policy_image(self._camera_target)
@@ -632,15 +619,13 @@ class BulletClothEnv_:
         aux_output=None,
         img=None,
         camera_type="default",
-        image_space="cropped",
         ee_in_image=None,
-        policy_fov=False,
     ):
         """
-        Draw GT (blue) + optional aux (green) corner dots on an image.
-        If 'img' is None, a DR-free cropped RGB frame is rendered.
+        Draw GT (blue) + optional aux (green) corner dots on an image (no crop).
+        If 'img' is None, a stable RGB frame is rendered at the camera's full size.
         """
-        # DR-free RGB (same as policy view) unless a specific image is provided
+        # Stable RGB unless a specific image is provided
         if img is None:
             img = self.camera.render_rgb(self._camera_target, cam_type=camera_type)
         h, w = img.shape[:2]
@@ -648,20 +633,12 @@ class BulletClothEnv_:
         # (MuJoCo parity) Project EE into image if provided.
         if ee_in_image is not None:
             ee_w = np.asarray(ee_in_image, dtype=np.float64)[:3].reshape(1, 3)
-            ee_log = self._project_points_uv(
-                ee_w,
-                label="ee",
-                cam_type=camera_type,
-                crop_to_policy=policy_fov,  # <-- match the narrowed FOV used on corner_image
-            )
-            key_uv = "uv_full" if image_space == "full" else "uv_cropped"
-            u_ee, v_ee = ee_log[key_uv][:2]
+            ee_log = self._project_points_uv(ee_w, label="ee", cam_type=camera_type)
+            u_ee, v_ee = ee_log["uv_full"][:2]
             cv2.circle(img, (int(u_ee * w), int(v_ee * h)), int(point_size + 2), (0, 0, 0), -1)
 
         # Blue: GT corners in [0,1]
-        uv = self._get_corner_image_positions(
-            cam_type=camera_type, space=image_space, crop_to_policy=policy_fov
-        )
+        uv = self._get_corner_image_positions(cam_type=camera_type)
         for i in range(0, len(uv), 2):
             u = int(np.clip(uv[i] * w, 0, w - 1))
             v = int(np.clip(uv[i + 1] * h, 0, h - 1))
@@ -698,61 +675,49 @@ class BulletClothEnv_:
         ee_pos = self.get_ee_position_W()
         ee_in_image[:3] = ee_pos
 
-        # Use FULL buffers for high-res overlays
-        # For the corner image, render with a narrowed FOV so the 500x500 frame
-        # matches the policy crop perspective (no resize).
-        full_rgb_policy_fov = self.camera.render_rgb_full(
-            self._camera_target, cam_type="default", crop_to_policy=True
+        # Render the SAME policy/off-screen camera at both sizes (no crop)
+        policy_rgb_big = self.camera.render_rgb_dr(
+            self._camera_target, size=self.camera.render_size
         )
-        cropped_rgb_corners = full_rgb_policy_fov  # 500x500, original resolution
-        # Policy-sized crop stays as before (small) for CNN inputs
-        cropped_rgb_default = self.camera.render_rgb(self._camera_target, cam_type="default")
-        cropped_rgb_cnn = cropped_rgb_default
+        policy_rgb_small = self.camera.render_rgb_dr(self._camera_target)  # defaults to image_size
 
         # 0) Corner overlay (DEFAULT view), larger dots for visibility (8px)
         corner_image = self.get_masked_image(
             point_size=8,
             greyscale=False,
             aux_output=aux_output,
-            img=cropped_rgb_corners,
+            img=policy_rgb_big,
             camera_type="default",
-            image_space="full",
-            policy_fov=True,
             ee_in_image=ee_in_image,
         )
 
         # 2) CNN color image (FULL render buffer), tiny dots (2px)
-        full_rgb = self.camera.render_rgb_full(self._camera_target, cam_type="default")
         cnn_color_image_full = self.get_masked_image(
             point_size=2,
             greyscale=False,
             aux_output=aux_output,
-            img=full_rgb,
+            img=policy_rgb_big,
             camera_type="default",
-            image_space="full",
             ee_in_image=ee_in_image,
         )
 
-        # 3) CNN color image (cropped) — reuse the same default cropped RGB
+        # 3) CNN color image (policy size, no crop)
         cnn_color_image = self.get_masked_image(
             point_size=2,
             greyscale=False,
             aux_output=aux_output,
-            img=cropped_rgb_cnn,
+            img=policy_rgb_small,
             camera_type="default",
-            image_space="cropped",
             ee_in_image=ee_in_image,
         )
 
-        # 4) CNN grayscale image (policy/training path) — EXACT training view (DR + aug + gray)
-        # Use the same pipeline as get_image_obs()/camera.policy_image(...)
+        # 4) CNN grayscale image (policy size, no crop)
         cnn_image = self.get_masked_image(
             point_size=2,
             greyscale=True,
             aux_output=aux_output,
-            img=cropped_rgb_cnn,
+            img=policy_rgb_small,
             camera_type="default",
-            image_space="cropped",
             ee_in_image=ee_in_image,
         )
         # Use the policy_image pipeline to get the exact grayscale
@@ -761,15 +726,13 @@ class BulletClothEnv_:
 
         # 1) Eval image from eval_camera (stable), smaller dots (4px), no aux overlay)
         # Do this LAST so the GUI preview (if enabled) settles on the eval view.
-        eval_full = self.camera.render_rgb_full(self._camera_target, cam_type="eval_camera")
-        eval_image_rgb = eval_full  # render at target size; no resize
+        eval_image_rgb = self.camera.render_rgb_full(self._camera_target, cam_type="eval_camera")
         eval_image = self.get_masked_image(
             point_size=4,
             greyscale=False,
             aux_output=None,
             img=eval_image_rgb,
             camera_type="eval_camera",
-            image_space="full",
             ee_in_image=ee_in_image,
         )
 
