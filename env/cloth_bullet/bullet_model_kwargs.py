@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 _DEFAULTS = {
     # image & rendering
     "physics_backend": "bullet",
-    "render_size": [320, 240],  # [W, H]
+    "render_size": [500, 500],  # [W, H]
     "show_depth_preview": 1,
     "show_seg_preview": 1,
     # appearance DR (textures/tints)
@@ -30,7 +30,7 @@ _DEFAULTS = {
     "lookat_position_randomization": True,
     "lookat_position_randomization_radius": 0.01,
     "camera_config": {
-        "type": "all",  # one of: default, side, front, up, all
+        "type": "default",  # one of: default, side, front, up, all
         "train_camera_fovy": 60.0,
         "fovy_range": [55.0, 65.0],
         "near_clip": 0.01,
@@ -39,7 +39,7 @@ _DEFAULTS = {
         "target_lookat_pos": [0.49476399, 0.00668401, 0.13310541],
         "types": {
             "default": {
-                "eye": [0.236, -0.594, 0.600],
+                "eye": [-0.10097, -0.93799, 0.76923],
                 "up": [0.0, 0.0, 1.0],
             },
             "side": {"eye": [-0.4, -0.7, 0.65], "up": [0.0, 0.0, 1.0]},

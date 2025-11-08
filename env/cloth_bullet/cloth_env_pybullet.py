@@ -420,16 +420,20 @@ class BulletClothEnv_:
         # print(f"Debug: corner_1 distance: {info['corner_1']}")
         return reward, done, info
 
-    def _project_points_uv(self, points_W, label="points", cam_type="default"):
+    def _project_points_uv(
+        self, points_W, label="points", cam_type="default", crop_to_policy=False
+    ):
         """
         Project a list of world points with the SAME camera + crop as render_rgb().
         Returns: dict with per-point internals + final normalized UVs.
         """
         # Camera & crop params exactly like render_rgb()
-        cam_setup = self.camera.get_stable_camera_setup(self._camera_target, cam_type=cam_type)
+        cam_setup = self.camera.get_stable_camera_setup(
+            self._camera_target, cam_type=cam_type, crop_to_policy=crop_to_policy
+        )
         crop = self.camera.get_render_crop_params()
         view, proj = self.camera.get_stable_view_projection_matrices(
-            self._camera_target, cam_type=cam_type
+            self._camera_target, cam_type=cam_type, crop_to_policy=crop_to_policy
         )
 
         V = np.array(view, dtype=np.float64).reshape(4, 4).T
@@ -485,7 +489,9 @@ class BulletClothEnv_:
         return out
 
     # ---------- CORNER UVs (kept as the API for drawing) ----------
-    def _get_corner_image_positions(self, cam_type="default", space="cropped"):
+    def _get_corner_image_positions(
+        self, cam_type="default", space="cropped", crop_to_policy=False
+    ):
         """
         Return [u0,v0, u1,v1, u2,v2, u3,v3] in [0,1] for the cloth's corners
         using the *named* cloth corner vertices (parity with MuJoCo).
@@ -493,7 +499,9 @@ class BulletClothEnv_:
         pos_dict = self.cloth.get_positions_W()
         names = ["0", "1", "2", "3"]
         named_pts = [pos_dict[self.cloth.corner_v_names[n]] for n in names]
-        named_log = self._project_points_uv(named_pts, label="named_corners", cam_type=cam_type)
+        named_log = self._project_points_uv(
+            named_pts, label="named_corners", cam_type=cam_type, crop_to_policy=crop_to_policy
+        )
         key = "uv_full" if space == "full" else "uv_cropped"
         return np.array(named_log[key], dtype=np.float32)
 
@@ -625,6 +633,8 @@ class BulletClothEnv_:
         img=None,
         camera_type="default",
         image_space="cropped",
+        ee_in_image=None,
+        policy_fov=False,
     ):
         """
         Draw GT (blue) + optional aux (green) corner dots on an image.
@@ -635,8 +645,23 @@ class BulletClothEnv_:
             img = self.camera.render_rgb(self._camera_target, cam_type=camera_type)
         h, w = img.shape[:2]
 
+        # (MuJoCo parity) Project EE into image if provided.
+        if ee_in_image is not None:
+            ee_w = np.asarray(ee_in_image, dtype=np.float64)[:3].reshape(1, 3)
+            ee_log = self._project_points_uv(
+                ee_w,
+                label="ee",
+                cam_type=camera_type,
+                crop_to_policy=policy_fov,  # <-- match the narrowed FOV used on corner_image
+            )
+            key_uv = "uv_full" if image_space == "full" else "uv_cropped"
+            u_ee, v_ee = ee_log[key_uv][:2]
+            cv2.circle(img, (int(u_ee * w), int(v_ee * h)), int(point_size + 2), (0, 0, 0), -1)
+
         # Blue: GT corners in [0,1]
-        uv = self._get_corner_image_positions(cam_type=camera_type, space=image_space)
+        uv = self._get_corner_image_positions(
+            cam_type=camera_type, space=image_space, crop_to_policy=policy_fov
+        )
         for i in range(0, len(uv), 2):
             u = int(np.clip(uv[i] * w, 0, w - 1))
             v = int(np.clip(uv[i + 1] * h, 0, h - 1))
@@ -663,18 +688,37 @@ class BulletClothEnv_:
         if aux_output is None:
             print("[Bullet] capture_images: aux_output is None", flush=True)
 
-        # Pre-render a single CROPPED RGB with the DEFAULT stable camera.
-        # We'll reuse it for all default-view overlays so the GUI doesn't bounce.
-        cropped_rgb_default = self.camera.render_rgb(self._camera_target, cam_type="default")
+        w_eval, h_eval = 500, 500
+        w_corners, h_corners = 500, 500
+        w_cnn, h_cnn = self.image_size
+        # In Bullet, full buffer size lives under render_size
+        w_cnn_full, h_cnn_full = self.camera.render_size
 
-        # 0) Corner overlay (cropped RGB), larger dots for visibility (8px)
+        ee_in_image = np.ones(4)
+        ee_pos = self.get_ee_position_W()
+        ee_in_image[:3] = ee_pos
+
+        # Use FULL buffers for high-res overlays
+        # For the corner image, render with a narrowed FOV so the 500x500 frame
+        # matches the policy crop perspective (no resize).
+        full_rgb_policy_fov = self.camera.render_rgb_full(
+            self._camera_target, cam_type="default", crop_to_policy=True
+        )
+        cropped_rgb_corners = full_rgb_policy_fov  # 500x500, original resolution
+        # Policy-sized crop stays as before (small) for CNN inputs
+        cropped_rgb_default = self.camera.render_rgb(self._camera_target, cam_type="default")
+        cropped_rgb_cnn = cropped_rgb_default
+
+        # 0) Corner overlay (DEFAULT view), larger dots for visibility (8px)
         corner_image = self.get_masked_image(
             point_size=8,
             greyscale=False,
             aux_output=aux_output,
-            img=cropped_rgb_default,
+            img=cropped_rgb_corners,
             camera_type="default",
-            image_space="cropped",
+            image_space="full",
+            policy_fov=True,
+            ee_in_image=ee_in_image,
         )
 
         # 2) CNN color image (FULL render buffer), tiny dots (2px)
@@ -686,6 +730,7 @@ class BulletClothEnv_:
             img=full_rgb,
             camera_type="default",
             image_space="full",
+            ee_in_image=ee_in_image,
         )
 
         # 3) CNN color image (cropped) — reuse the same default cropped RGB
@@ -693,36 +738,40 @@ class BulletClothEnv_:
             point_size=2,
             greyscale=False,
             aux_output=aux_output,
-            img=cropped_rgb_default,
+            img=cropped_rgb_cnn,
             camera_type="default",
             image_space="cropped",
+            ee_in_image=ee_in_image,
         )
 
-        # 4) CNN grayscale image (cropped) — reuse the same default cropped RGB
+        # 4) CNN grayscale image (policy/training path) — EXACT training view (DR + aug + gray)
+        # Use the same pipeline as get_image_obs()/camera.policy_image(...)
         cnn_image = self.get_masked_image(
             point_size=2,
             greyscale=True,
             aux_output=aux_output,
-            img=cropped_rgb_default,
+            img=cropped_rgb_cnn,
             camera_type="default",
             image_space="cropped",
+            ee_in_image=ee_in_image,
         )
+        # Use the policy_image pipeline to get the exact grayscale
+        # cnn_image_flat = self.camera.policy_image(self._camera_target)  # [0,1], flat
+        # cnn_image = (cnn_image_flat.reshape(h_cnn, w_cnn) * 255.0).astype("uint8")
 
         # 1) Eval image from eval_camera (stable), smaller dots (4px), no aux overlay)
         # Do this LAST so the GUI preview (if enabled) settles on the eval view.
-        eval_image_rgb = self.camera.render_rgb(self._camera_target, cam_type="eval_camera")
+        eval_full = self.camera.render_rgb_full(self._camera_target, cam_type="eval_camera")
+        eval_image_rgb = eval_full  # render at target size; no resize
         eval_image = self.get_masked_image(
             point_size=4,
             greyscale=False,
             aux_output=None,
             img=eval_image_rgb,
             camera_type="eval_camera",
-            image_space="cropped",
+            image_space="full",
+            ee_in_image=ee_in_image,
         )
-
-        # If a GUI viewer is active, pin the on-screen debug camera to the eval view.
-        if self.has_viewer:
-            self.camera.set_debug_camera(self._camera_target, cam_type="eval_camera")
 
         return (corner_image, eval_image, cnn_color_image_full, cnn_color_image, cnn_image)
 

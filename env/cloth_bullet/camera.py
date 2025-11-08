@@ -191,14 +191,17 @@ class Camera:
         y0 = (H_render - H_out) // 2
         return img[y0 : y0 + H_out, x0 : x0 + W_out, :].copy()
 
-    def render_rgb_full(self, center_w, cam_type="default"):
+    def render_rgb_full(self, center_w, cam_type="default", crop_to_policy=False):
         """
         Stable renderer (NO DR) that returns the FULL render buffer size
         (W_render x H_render), without the center-crop used for policy images.
         Matches the camera + lighting of render_rgb().
         """
-        # Use the same stable camera setup as render_rgb(), but no crop
-        view_matrix, proj_matrix = self.get_stable_view_projection_matrices(center_w, cam_type)
+        # Use the same stable camera setup as render_rgb(), but optionally narrow FOV
+        # so the full 500x500 frame matches the policy crop perspective.
+        view_matrix, proj_matrix = self.get_stable_view_projection_matrices(
+            center_w, cam_type, crop_to_policy=crop_to_policy
+        )
 
         # Fixed lights (never randomized)
         lights_cfg = self.randomization_kwargs["lights"]
@@ -220,7 +223,9 @@ class Camera:
         img = np.reshape(rgba, (H_render, W_render, 4))[:, :, :3].astype("uint8")
         return img.copy()
 
-    def get_stable_view_projection_matrices(self, center_w, cam_type="default"):
+    def get_stable_view_projection_matrices(
+        self, center_w, cam_type="default", crop_to_policy=False
+    ):
         """
         View/projection matrices that exactly match render_rgb() (no DR).
         Use these for projecting world points onto the 'real' RGB frame.
@@ -231,6 +236,11 @@ class Camera:
         eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
         up = cam_spec["up"]
         fov = float(self._cam_cfg["train_camera_fovy"])
+        # If we want the full frame to match the policy crop FOV, shrink the FOV
+        # by the crop fraction (H_out/H_render). This reproduces the crop without resizing.
+        if crop_to_policy:
+            frac = self.image_size[1] / self.render_size[1]
+            fov = float(2.0 * np.degrees(np.arctan(np.tan(np.radians(fov) / 2.0) * frac)))
         aspect = W_render / H_render
         view = p.computeViewMatrix(eye, np.asarray(center_w, dtype=float).tolist(), up)
         proj = p.computeProjectionMatrixFOV(
@@ -238,13 +248,16 @@ class Camera:
         )
         return view, proj
 
-    def get_stable_camera_setup(self, center_w, cam_type="default"):
+    def get_stable_camera_setup(self, center_w, cam_type="default", crop_to_policy=False):
         """Return eye, up, fov, aspect, near, far for a given stable cam_type."""
         W_render, H_render = self.render_size
         cam_spec = self._cam_cfg["types"][cam_type]
         eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
         up = cam_spec["up"]
         fov = float(self._cam_cfg["train_camera_fovy"])
+        if crop_to_policy:
+            frac = self.image_size[1] / self.render_size[1]
+            fov = float(2.0 * np.degrees(np.arctan(np.tan(np.radians(fov) / 2.0) * frac)))
         aspect = W_render / H_render
         near = float(self._cam_cfg["near_clip"])
         far = float(self._cam_cfg["far_clip"])
@@ -289,7 +302,6 @@ class Camera:
         img = self.render_rgb_dr(center_w)
         if self.randomization_kwargs.get("albumentations_randomization"):
             img = self.albumentations_transform(image=img)["image"]
-        import cv2
 
         img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         img = (img.astype(np.float32) / 255.0).clip(0.0, 1.0)
