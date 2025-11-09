@@ -146,8 +146,8 @@ _DEFAULTS = {
         "ang_damping": 0.1,
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
-        "workspace_limits_min": [-0.35, -0.35, 0.0],
-        "workspace_limits_max": [0.35, 0.35, 0.4],
+        "workspace_limits_min": [-0.25, -0.25, 0.001],
+        "workspace_limits_max": [0.08, 0.08, 0.08],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
         # NEW: Panda specifics

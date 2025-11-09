@@ -85,6 +85,8 @@ class BulletClothEnv_:
         self.world = PyBulletWorld(self.has_viewer, self.timestep, self.kwargs)
         self.camera = Camera(self.image_size, self.kwargs)
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
+        self._ws_vis_id = None  # remove them: id of the translucent workspace box
+        self._ws_line_ids = []  # remove them: store wireframe line ids so we can clear them
 
         robot_cfg = self.kwargs["robot"]
         self.limits_min = robot_cfg["workspace_limits_min"]
@@ -270,6 +272,14 @@ class BulletClothEnv_:
             hi = np.array(cloth_cfg["color_hi"])
             self.cloth.set_color((self.np_random.uniform(lo, hi)).tolist())
 
+        # Also spawn a translucent, non-colliding solid box
+        # self._spawn_workspace_visual_box(
+        #    origin=self.relative_origin,
+        #    limits_min=self.limits_min,
+        #    limits_max=self.limits_max,
+        #    rgba=[0.0, 1.0, 0.0, 0.15],
+        # )
+
         # Now show the fully initialized scene (single switch at the very end)
         try:
             if self.has_viewer:
@@ -297,6 +307,40 @@ class BulletClothEnv_:
         except Exception:
             pass
         return self.get_obs()
+
+    def _spawn_workspace_visual_box(
+        self, origin, limits_min, limits_max, rgba=[0, 1, 0, 0.15]
+    ):  # remove them
+        """Create a translucent box that matches the workspace. No collisions."""  # remove them
+        # Remove previous visual box if it exists  # remove them
+        if getattr(self, "_ws_vis_id", None) is not None:  # remove them
+            try:  # remove them
+                p.removeBody(self._ws_vis_id)  # remove them
+            except Exception:  # remove them
+                pass  # remove them
+            self._ws_vis_id = None  # remove them
+
+        o = np.array(origin, dtype=float)  # remove them
+        mn = np.array(limits_min, dtype=float)  # remove them
+        mx = np.array(limits_max, dtype=float)  # remove them
+        # Be robust to swapped min/max:                      # remove them
+        lo = np.minimum(mn, mx)  # remove them
+        hi = np.maximum(mn, mx)  # remove them
+        half_extents = (hi - lo) * 0.5  # remove them
+        center = o + (lo + hi) * 0.5  # remove them
+
+        vis = p.createVisualShape(  # remove them
+            shapeType=p.GEOM_BOX,  # remove them
+            halfExtents=half_extents.tolist(),  # remove them
+            rgbaColor=rgba,  # remove them
+        )  # remove them
+        self._ws_vis_id = p.createMultiBody(  # remove them
+            baseMass=0.0,  # remove them (static visual)
+            baseCollisionShapeIndex=-1,  # remove them (no collision)
+            baseVisualShapeIndex=vis,  # remove them
+            basePosition=center.tolist(),  # remove them
+            baseOrientation=[0, 0, 0, 1],  # remove them
+        )  # remove them
 
     def step(self, action):
         raw_action = action.copy()
