@@ -71,7 +71,7 @@ class FoldingTask:
             self.extra_reward,
         )
 
-    def sample_goal(self, cloth_pos_I, sites):
+    def sample_goal(self, cloth_pos_I, sites=None):
         """
         Samples a new goal for the episode.
         This function replicates the logic from the original `sample_goal_I`.
@@ -86,8 +86,9 @@ class FoldingTask:
             noise = task_cfg["goal_noise"]
 
         for i, c in enumerate(self.constraints):
-            site1_pos = cloth_pos_I[sites[c["origin"]]]
-            site2_pos = cloth_pos_I[sites[c["target"]]]
+            # cloth_pos_I is a dict keyed by site names (e.g., "S0_0")
+            site1_pos = cloth_pos_I[c["origin"]]
+            site2_pos = cloth_pos_I[c["target"]]
             direction = site2_pos - site1_pos
             distance = np.linalg.norm(direction)
             direction = direction / distance if distance > 0 else direction
@@ -97,12 +98,12 @@ class FoldingTask:
 
         return goal, noise
 
-    def get_achieved_goal(self, cloth_pos_I, sites):
+    def get_achieved_goal(self, cloth_pos_I, sites=None):
         """
         Computes the achieved goal from the current cloth state.
         This replicates the logic from the original `get_obs`.
         """
-        return np.array([cloth_pos_I[sites[c["origin"]]] for c in self.constraints]).flatten()
+        return np.array([cloth_pos_I[c["origin"]] for c in self.constraints]).flatten()
 
     def compute_reward(self, achieved_goal, desired_goal, info):
         """Computes the reward for the current state by calling the utility function."""

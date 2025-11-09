@@ -109,12 +109,6 @@ class BulletClothEnv_:
                     -np.inf, np.inf, shape=obs["robot_observation"].shape, dtype=np.float32
                 ),
                 image=gym.spaces.Box(-np.inf, np.inf, shape=obs["image"].shape, dtype=np.float32),
-                policy_input=gym.spaces.Box(  # NEW
-                    -np.inf,
-                    np.inf,
-                    shape=(obs["policy_input"].shape[0],),
-                    dtype=np.float32,
-                ),
             )
         )
 
@@ -249,9 +243,7 @@ class BulletClothEnv_:
         self._prev_ee_pos_W = self.robot.get_ee_position_W()
 
         # Set goal for the episode
-        self.goal, self.goal_noise = self.task.sample_goal(
-            self.get_cloth_position_I(), self.cloth.sites
-        )
+        self.goal, self.goal_noise = self.task.sample_goal(self.get_cloth_position_I())
 
         # Capture initial image (viewer can stay off; camera grabs directly)
         img = self.get_image_obs()
@@ -353,6 +345,7 @@ class BulletClothEnv_:
         reward = self.task.compute_reward(obs["achieved_goal"], self.goal, {})
 
         cloth_pos_I = self.get_cloth_position_I()
+        verts_W = self.cloth.get_positions_W()
         # This is now calculated below using camera projection
         # corner_positions = self._get_corner_image_positions().astype(np.float32)
         # corner_positions = self._get_corner_image_positions()
@@ -369,7 +362,7 @@ class BulletClothEnv_:
 
         for corner_key in ("0", "1", "2", "3"):
             v_name = self.cloth.corner_v_names[corner_key]
-            achieved_pos_I = cloth_pos_I[v_name]
+            achieved_pos_I = verts_W[v_name] - self.relative_origin
             site_name = vertex_to_site_name.get(v_name)
 
             if site_name and site_name in site_name_to_goal_idx:
@@ -497,14 +490,16 @@ class BulletClothEnv_:
 
     def get_obs(self):
         cloth_pos_I = self.get_cloth_position_I()
-        cloth_vel_W = self.cloth.get_velocities_W(self.timestep)
+        vel_all_W = self.cloth.get_velocities_W(self.timestep)
+        # site-filtered velocities in the SAME order as positions
+        vel_sites_W = {site: vel_all_W[vname] for site, vname in self.cloth.sites.items()}
 
-        achieved_goal = self.task.get_achieved_goal(cloth_pos_I, self.cloth.sites)
+        achieved_goal = self.task.get_achieved_goal(cloth_pos_I)
 
         cloth_obs = np.concatenate(
             [
                 np.array(list(cloth_pos_I.values())).flatten(),
-                np.array(list(cloth_vel_W.values())).flatten(),
+                np.array(list(vel_sites_W.values())).flatten(),
             ]
         )
 
@@ -544,14 +539,13 @@ class BulletClothEnv_:
 
         if self.robot_observation == "ee":
             robot_obs = np.concatenate([ee_pos_I, ee_vel_W, desired_pos_ctrl_I])
-        else:  # "ctrl"
+        elif self.robot_observation == "ctrl":
             robot_obs = np.concatenate([self.previous_raw_action, np.zeros(6)])
+        elif self.robot_observation == "none":  # NEW for parity
+            robot_obs = np.zeros(9, dtype=np.float32)
 
         image_stack = np.array(list(self.frame_stack)).flatten()
         # concatenated input vector used by the policy: [image | 27-d extras]
-        policy_input = np.concatenate([image_stack, self._policy_extra_tail()], axis=0).astype(
-            np.float32
-        )
 
         # Sanitize and clip all observation components
         def nan(a):
@@ -568,26 +562,7 @@ class BulletClothEnv_:
             ).copy(),
             "observation": clip(nan(cloth_obs), -1e3, 1e3).copy().flatten(),
             "robot_observation": clip(nan(robot_obs), -1e3, 1e3).copy().flatten(),
-            "policy_input": policy_input.copy(),  # NEW
         }
-
-    def _policy_extra_tail(self) -> np.ndarray:
-        """
-        27-D tail to match MuJoCo policy extras.
-        Starts from the 9-dim 'ee' block and zero-pads to 27.
-        """
-        if self.robot_observation == "ee":
-            ee_pos_I = self.get_ee_position_I()  # (3,)
-            ee_vel_W = self.get_ee_velocity()  # (3,)
-            des_I = self.desired_pos_ctrl_W - self.relative_origin  # (3,)
-            base = np.concatenate([ee_pos_I, ee_vel_W, des_I]).astype(np.float32)  # (9,)
-        else:  # "ctrl"
-            base = np.concatenate([self.previous_raw_action, np.zeros(6)], axis=0).astype(
-                np.float32
-            )
-        tail = np.zeros(27, dtype=np.float32)
-        tail[: min(27, base.size)] = base[: min(27, base.size)]
-        return tail
 
     def get_ee_position_W(self):
         return self.robot.get_ee_position_W()
@@ -608,9 +583,12 @@ class BulletClothEnv_:
         return self.robot.get_joint_velocities()
 
     def get_cloth_position_I(self):
-        """Returns cloth vertex positions relative to the robot's starting grasp point."""
-        positions_W = self.cloth.get_positions_W()
-        return {k: (v - self.relative_origin) for k, v in positions_W.items()}
+        verts_W = self.cloth.get_positions_W()  # dict: v_* -> [x,y,z]
+        # map S{r}_{c} -> corresponding vertex name, keep insertion order from compute_sites()
+        return {
+            site: (verts_W[vname] - self.relative_origin)
+            for site, vname in self.cloth.sites.items()
+        }
 
     def get_masked_image(
         self,
@@ -647,6 +625,11 @@ class BulletClothEnv_:
         # Green: predicted (assumed already in [0,1]); use first 8 values (4 uv pairs)
         if aux_output is not None:
             flat = np.asarray(aux_output, dtype=np.float32).flatten()[:8]
+            # If predictions look like pixels (e.g., ~[0..100]), normalize to [0,1]
+            # if np.nanmax(flat) > 1.0:
+            #    W_ref, H_ref = self.image_size  # policy/CNN input size
+            #    flat[0::2] = flat[0::2] / float(W_ref)
+            #    flat[1::2] = flat[1::2] / float(H_ref)
             flat = np.clip(flat, 0.0, 1.0)
             for i in range(0, min(len(flat), 8), 2):
                 au = int(np.clip(flat[i] * w, 0, w - 1))
