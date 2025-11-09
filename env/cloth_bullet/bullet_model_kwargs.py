@@ -161,8 +161,15 @@ _DEFAULTS = {
             2.37451,
             -1.50499,
         ],
-        "finger": {"closed_pos": 0.0, "max_force": 200.0, "kp": 1.0, "max_vel": 2.0},
-        "ik": {"max_iters": 100, "residual_threshold": 1e-5},
+        "arm_control": {"position_gain": 0.25, "velocity_gain": 1.0, "max_force_scale": 1.0},
+        "finger": {"closed_pos": 0.0, "max_force": 30.0, "kp": 1.0, "max_vel": 0.5},
+        "ik": {
+            "max_iters": 100,
+            "residual_threshold": 1e-4,
+            "use_orientation": True,
+            "target_euler_rpy": [0.0, 3.14159265, 0.0],  # “tool-down” (world Y-rotation of pi)
+            # Alternatively: "target_quat_xyzw": [x, y, z, w]
+        },
         "lift_fold_arc": {
             "enabled": True,
             "xy_travel_dist": 0.25,

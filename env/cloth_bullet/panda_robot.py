@@ -17,7 +17,13 @@ class PandaRobot:
         self._find_links_and_joints()
         self._get_joint_limits()
         self._setup_finger_control(robot_cfg["finger"])
-        self._setup_ik_params(robot_cfg["ik"])
+        self._setup_ik_params(robot_cfg.get("ik", {}))
+
+        # --- NEW: explicit joint-space position controller gains ---
+        arm_ctrl = (robot_cfg or {}).get("arm_control", {})
+        self.arm_pos_gain = float(arm_ctrl.get("position_gain", 0.25))
+        self.arm_vel_gain = float(arm_ctrl.get("velocity_gain", 1.0))
+        self.arm_max_force_scale = float(arm_ctrl.get("max_force_scale", 1.0))
         self.set_initial_joint_positions(robot_cfg["init_joint_positions"])
         self.weld_fingers_shut()
 
@@ -88,8 +94,20 @@ class PandaRobot:
         self.finger_max_vel = float(finger_cfg["max_vel"])
 
     def _setup_ik_params(self, ik_cfg=None):
-        self.ik_max_iters = int(ik_cfg["max_iters"])
-        self.ik_residual_threshold = float(ik_cfg["residual_threshold"])
+        ik_cfg = ik_cfg or {}
+        self.ik_max_iters = int(ik_cfg.get("max_iters", 100))
+        self.ik_residual_threshold = float(ik_cfg.get("residual_threshold", 1e-4))
+        # NEW: orientation-aware IK options
+        self.ik_use_orientation = bool(ik_cfg.get("use_orientation", True))
+        if "target_quat_xyzw" in ik_cfg:
+            self._ik_target_quat = tuple(map(float, ik_cfg["target_quat_xyzw"]))
+        elif "target_euler_rpy" in ik_cfg:
+            self._ik_target_quat = p.getQuaternionFromEuler(
+                [float(x) for x in ik_cfg["target_euler_rpy"]]
+            )
+        else:
+            # Default “tool-down” wrt world: rotate 180° about Y
+            self._ik_target_quat = p.getQuaternionFromEuler([0.0, np.pi, 0.0])
 
     def weld_fingers_shut(self):
         """Creates fixed constraints to weld the fingers to the hand, ensuring a rigid grip."""
@@ -153,35 +171,61 @@ class PandaRobot:
         """Returns the current velocities of the arm joints."""
         return np.array([p.getJointState(self.robot_id, j)[1] for j in self.arm_joint_indices])
 
-    def calculate_ik(self, target_pos):
-        """
-        Calculates the joint positions needed to reach a target end-effector position.
-        This must use the ee_link_index (grasptarget) to move the point between
-        the fingers to the target.
-        """
-        return p.calculateInverseKinematics(
-            self.robot_id,
-            self.ee_link_index,
-            target_pos,
-            lowerLimits=self.joint_limits_lower,
-            upperLimits=self.joint_limits_upper,
-            jointRanges=self.joint_ranges,
-            restPoses=self.joint_rest_poses,
-            maxNumIterations=self.ik_max_iters,
-            residualThreshold=self.ik_residual_threshold,
-        )
+    def calculate_ik(self, target_pos_W):
+        target_pos_W = np.asarray(target_pos_W, dtype=float).tolist()
+        self._last_ik_target_pos = np.array(target_pos_W, dtype=float)
+        target_orn = self._ik_target_quat if self.ik_use_orientation else None
+
+        if target_orn is None:
+            sol = p.calculateInverseKinematics(
+                self.robot_id,
+                self.ee_link_index,
+                target_pos_W,
+                lowerLimits=self.joint_limits_lower,
+                upperLimits=self.joint_limits_upper,
+                jointRanges=self.joint_ranges,
+                restPoses=self.joint_rest_poses,
+                maxNumIterations=self.ik_max_iters,
+                residualThreshold=self.ik_residual_threshold,
+            )
+        else:
+            sol = p.calculateInverseKinematics(
+                self.robot_id,
+                self.ee_link_index,
+                target_pos_W,
+                target_orn,
+                lowerLimits=self.joint_limits_lower,
+                upperLimits=self.joint_limits_upper,
+                jointRanges=self.joint_ranges,
+                restPoses=self.joint_rest_poses,
+                maxNumIterations=self.ik_max_iters,
+                residualThreshold=self.ik_residual_threshold,
+            )
+        return np.array(sol[: len(self.arm_joint_indices)], dtype=float)
 
     def apply_joint_positions(self, joint_positions):
-        """
-        Applies target joint positions to the robot's arm controllers.
-        """
-        p.setJointMotorControlArray(
-            self.robot_id,
-            self.arm_joint_indices[:7],
-            p.POSITION_CONTROL,
-            targetPositions=joint_positions[:7],
-            forces=self.joint_max_forces[:7],
-        )
+        # Per-joint POSITION_CONTROL with explicit gains/forces
+        for i, j_idx in enumerate(self.arm_joint_indices[: len(joint_positions)]):
+            p.setJointMotorControl2(
+                bodyUniqueId=self.robot_id,
+                jointIndex=j_idx,
+                controlMode=p.POSITION_CONTROL,
+                targetPosition=float(joint_positions[i]),
+                force=float(self.joint_max_forces[i] * self.arm_max_force_scale),
+                positionGain=self.arm_pos_gain,
+                velocityGain=self.arm_vel_gain,
+            )
+        # Debug EE error vs last IK target (pos + orientation)
+        ee = p.getLinkState(self.robot_id, self.ee_link_index, computeForwardKinematics=True)
+        ee_pos = np.array(ee[4], dtype=float)
+        ee_orn = np.array(ee[5], dtype=float)
+        pos_err = float(np.linalg.norm(ee_pos - getattr(self, "_last_ik_target_pos", ee_pos)))
+        orn_err = None
+        if self.ik_use_orientation and hasattr(self, "_ik_target_quat"):
+            # quaternion angle error (deg)
+            dot = float(abs(np.dot(ee_orn, np.array(self._ik_target_quat))))
+            dot = max(min(dot, 1.0), 0.0)
+            orn_err = float(2.0 * np.arccos(dot) * 180.0 / np.pi)
 
     def force_fingers_closed(self):
         """Applies strong force to ensure fingers remain closed."""

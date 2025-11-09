@@ -329,11 +329,11 @@ class BulletClothEnv_:
 
         self.current_step += 1
 
-        try:
-            if self.has_viewer:
-                self.camera.print_gui_camera_as_type(name=f"step_{self.current_step:04d}")
-        except Exception:
-            pass
+        #try:
+        #    if self.has_viewer:
+        #        self.camera.print_gui_camera_as_type(name=f"step_{self.current_step:04d}")
+        #except Exception:
+        #    pass
 
         for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):
             if np.any(np.isnan(obs[k])):
