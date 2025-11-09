@@ -229,6 +229,17 @@ class BulletClothEnv_:
             self.robot.reset_to_joint_positions(joint_positions)
             self.world.step()
 
+        # Ensure orientation is locked before making the soft anchor (silent unless summary below)
+        """
+        ee_quat = self.robot.get_ee_pose_W()
+        orn_err_deg = self.robot.quat_angle_error_deg(ee_quat, self.robot._ik_target_quat)
+        if orn_err_deg > 0.5:  # ~0.5° tolerance
+            joint_positions = self.robot.calculate_ik(corner_world_pos)
+            self.robot.reset_to_joint_positions(joint_positions)
+            self.world.step()
+            ee_quat = self.robot.get_ee_pose_W()
+            orn_err_deg = self.robot.quat_angle_error_deg(ee_quat, self.robot._ik_target_quat)
+        """
         # Anchor cloth to robot's hand (using the correct ee_link_index)
         self.cloth.create_anchor(corner_v_name, self.robot.robot_id, self.robot.ee_link_index)
 
@@ -329,10 +340,10 @@ class BulletClothEnv_:
 
         self.current_step += 1
 
-        #try:
+        # try:
         #    if self.has_viewer:
         #        self.camera.print_gui_camera_as_type(name=f"step_{self.current_step:04d}")
-        #except Exception:
+        # except Exception:
         #    pass
 
         for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):

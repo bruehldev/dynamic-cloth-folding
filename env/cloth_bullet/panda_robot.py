@@ -265,3 +265,26 @@ class PandaRobot:
         # Apply it
         for i, j in enumerate(self.arm_joint_indices[: len(initial_qpos)]):
             p.resetJointState(self.robot_id, j, float(initial_qpos[i]), 0.0)
+
+    # Debug (not called)
+    # --- Inspect/link pose and orientation error ---
+    def get_ee_pose_W(self):
+        """Returns end-effector (current control link) pose (pos, quat) in world frame."""
+        ls = p.getLinkState(self.robot_id, self.ee_link_index, computeForwardKinematics=True)
+        return np.array(ls[0], dtype=float), np.array(ls[1], dtype=float)  # (pos, quat xyzw)
+
+    @staticmethod
+    def _normalize_quat_xyzw(q):
+        q = np.asarray(q, dtype=float)
+        n = np.linalg.norm(q)
+        return q if n == 0.0 else (q / n)
+
+    def quat_angle_error_deg(self, q_a, q_b):
+        """
+        Returns the absolute rotation angle (deg) between two quaternions (xyzw).
+        Uses 2*acos(|dot|) with normalization and double-cover handling.
+        """
+        a = self._normalize_quat_xyzw(q_a)
+        b = self._normalize_quat_xyzw(q_b)
+        dot = float(np.clip(np.abs(np.dot(a, b)), -1.0, 1.0))
+        return float(2.0 * np.degrees(np.arccos(dot)))
