@@ -275,10 +275,10 @@ class BulletClothEnv_:
             self.cloth.set_color((self.np_random.uniform(lo, hi)).tolist())
 
         # ---- Visualize the active task in the GUI (origins, targets, goal rays) ----
-        # try:  
-        #    self._draw_task_visuals()  
-        # except Exception:  
-        #    pass  
+        # try:
+        #    self._draw_task_visuals()
+        # except Exception:
+        #    pass
 
         # ---- Spawn a translucent, non-colliding solid box ---
         # self._spawn_workspace_visual_box(
@@ -412,8 +412,8 @@ class BulletClothEnv_:
 
         # Use the correct distance for the done condition and success signal
         dist_to_target = distances["1"]
-        is_success = dist_to_target < self.success_distance
-        # is_success = reward > self.fail_reward
+        # is_success = dist_to_target < self.success_distance
+        is_success = reward > self.fail_reward
 
         info = {
             "reward": float(reward),
@@ -768,95 +768,91 @@ class BulletClothEnv_:
     def close(self):
         self.world.close()
 
-    def _spawn_workspace_visual_box(
-        self, origin, limits_min, limits_max, rgba=[0, 1, 0, 0.15]
-    ):  
-        """Create a translucent box that matches the workspace. No collisions."""  
-        # Remove previous visual box if it exists  
-        if getattr(self, "_ws_vis_id", None) is not None:  
-            try:  
-                p.removeBody(self._ws_vis_id)  
-            except Exception:  
-                pass  
-            self._ws_vis_id = None  
+    def _spawn_workspace_visual_box(self, origin, limits_min, limits_max, rgba=[0, 1, 0, 0.15]):
+        """Create a translucent box that matches the workspace. No collisions."""
+        # Remove previous visual box if it exists
+        if getattr(self, "_ws_vis_id", None) is not None:
+            try:
+                p.removeBody(self._ws_vis_id)
+            except Exception:
+                pass
+            self._ws_vis_id = None
 
-        o = np.array(origin, dtype=float)  
-        mn = np.array(limits_min, dtype=float)  
-        mx = np.array(limits_max, dtype=float)  
-        # Be robust to swapped min/max:                      
-        lo = np.minimum(mn, mx)  
-        hi = np.maximum(mn, mx)  
-        half_extents = (hi - lo) * 0.5  
-        center = o + (lo + hi) * 0.5  
+        o = np.array(origin, dtype=float)
+        mn = np.array(limits_min, dtype=float)
+        mx = np.array(limits_max, dtype=float)
+        # Be robust to swapped min/max:
+        lo = np.minimum(mn, mx)
+        hi = np.maximum(mn, mx)
+        half_extents = (hi - lo) * 0.5
+        center = o + (lo + hi) * 0.5
 
-        vis = p.createVisualShape(  
-            shapeType=p.GEOM_BOX,  
-            halfExtents=half_extents.tolist(),  
-            rgbaColor=rgba,  
-        )  
-        self._ws_vis_id = p.createMultiBody(  
-            baseMass=0.0,   (static visual)
+        vis = p.createVisualShape(
+            shapeType=p.GEOM_BOX,
+            halfExtents=half_extents.tolist(),
+            rgbaColor=rgba,
+        )
+        self._ws_vis_id = p.createMultiBody(
+            baseMass=0.0,
             baseCollisionShapeIndex=-1,
-            baseVisualShapeIndex=vis,  
-            basePosition=center.tolist(),  
-            baseOrientation=[0, 0, 0, 1],  
-        )  
+            baseVisualShapeIndex=vis,
+            basePosition=center.tolist(),
+            baseOrientation=[0, 0, 0, 1],
+        )
 
-    # ---------------- Task visualization helpers (non-physics) ----------------  
-    def _draw_task_visuals(self):  
-        """Draws: (1) origin→target line per constraint, (2) origin→goal ray, (3) small spheres on sites."""  
-        # Clear previous  
-        for _id in getattr(self, "_task_line_ids", []):  
-            with np.errstate(all="ignore"):  
-                p.removeUserDebugItem(_id)  
-        for bid in getattr(self, "_task_marker_ids", []):  
-            with np.errstate(all="ignore"):  
-                p.removeBody(bid)  
-        self._task_line_ids, self._task_marker_ids = [], []  
+    # ---------------- Task visualization helpers (non-physics) ----------------
+    def _draw_task_visuals(self):
+        """Draws: (1) origin→target line per constraint, (2) origin→goal ray, (3) small spheres on sites."""
+        # Clear previous
+        for _id in getattr(self, "_task_line_ids", []):
+            with np.errstate(all="ignore"):
+                p.removeUserDebugItem(_id)
+        for bid in getattr(self, "_task_marker_ids", []):
+            with np.errstate(all="ignore"):
+                p.removeBody(bid)
+        self._task_line_ids, self._task_marker_ids = [], []
 
-        # Fetch current site positions  
-        verts_W = self.cloth.get_positions_W()  # mapping key -> 3D pos  
-        sites = self.cloth.sites  # name -> key used in verts_W  
+        # Fetch current site positions
+        verts_W = self.cloth.get_positions_W()  # mapping key -> 3D pos
+        sites = self.cloth.sites  # name -> key used in verts_W
 
-        # Colors  
-        col_origin = [0.1, 0.6, 1.0]  # blue-ish  
-        col_target = [1.0, 0.8, 0.1]  # yellow-ish  
-        col_goal_ray = [0.2, 1.0, 0.4]  # green-ish  
-        line_w = 2.0  
+        # Colors
+        col_origin = [0.1, 0.6, 1.0]  # blue-ish
+        col_target = [1.0, 0.8, 0.1]  # yellow-ish
+        col_goal_ray = [0.2, 1.0, 0.4]  # green-ish
+        line_w = 2.0
 
-        # Tiny sphere visual shape (reused)  
-        sph_vis = p.createVisualShape(
-            p.GEOM_SPHERE, radius=0.008, rgbaColor=[1, 1, 1, 1]
-        )  
+        # Tiny sphere visual shape (reused)
+        sph_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.008, rgbaColor=[1, 1, 1, 1])
 
-        for ci, c in enumerate(self.task.constraints):  
+        for ci, c in enumerate(self.task.constraints):
             ok = c["origin"]
-            tk = c["target"]  # site names (e.g., "S0_8")  
-            okey = sites[ok]  # verts_W key for origin     
-            tkey = sites[tk]  # verts_W key for target     
-            o = np.array(verts_W[okey], dtype=float)  # origin position (W)        
-            t = np.array(verts_W[tkey], dtype=float)  # target position (W)        
+            tk = c["target"]  # site names (e.g., "S0_8")
+            okey = sites[ok]  # verts_W key for origin
+            tkey = sites[tk]  # verts_W key for target
+            o = np.array(verts_W[okey], dtype=float)  # origin position (W)
+            t = np.array(verts_W[tkey], dtype=float)  # target position (W)
 
-            # 1) Origin → Target line (white-ish to distinguish)  
+            # 1) Origin → Target line (white-ish to distinguish)
             self._task_line_ids.append(
                 p.addUserDebugLine(
                     o.tolist(), t.tolist(), [0.9, 0.9, 0.9], lineWidth=line_w, lifeTime=0
                 )
-            )  
+            )
 
-            # 2) Origin → Goal ray (distance per constraint, no noise)  
-            dvec = t - o  # direction to target  
-            nrm = np.linalg.norm(dvec)  
-            if nrm > 1e-9:  
-                dvec = dvec / nrm  # unit  
-            g = o + dvec * float(c["distance"])  
+            # 2) Origin → Goal ray (distance per constraint, no noise)
+            dvec = t - o  # direction to target
+            nrm = np.linalg.norm(dvec)
+            if nrm > 1e-9:
+                dvec = dvec / nrm  # unit
+            g = o + dvec * float(c["distance"])
             self._task_line_ids.append(
                 p.addUserDebugLine(
                     o.tolist(), g.tolist(), col_goal_ray, lineWidth=line_w, lifeTime=0
                 )
-            )  
+            )
 
-            # 3) Small non-colliding markers on origin (blue) and target (yellow)  
+            # 3) Small non-colliding markers on origin (blue) and target (yellow)
             self._task_marker_ids.append(
                 p.createMultiBody(
                     baseMass=0.0,
@@ -864,10 +860,8 @@ class BulletClothEnv_:
                     baseVisualShapeIndex=sph_vis,
                     basePosition=o.tolist(),
                 )
-            )  
-            p.changeVisualShape(
-                self._task_marker_ids[-1], -1, rgbaColor=col_origin + [1.0]
-            )  
+            )
+            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_origin + [1.0])
             self._task_marker_ids.append(
                 p.createMultiBody(
                     baseMass=0.0,
@@ -875,24 +869,22 @@ class BulletClothEnv_:
                     baseVisualShapeIndex=sph_vis,
                     basePosition=t.tolist(),
                 )
-            )  
-            p.changeVisualShape(
-                self._task_marker_ids[-1], -1, rgbaColor=col_target + [1.0]
-            )  
+            )
+            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_target + [1.0])
 
-            # 4) Labels (origin/target indices)  
+            # 4) Labels (origin/target indices)
             self._task_line_ids.append(
                 p.addUserDebugText(
                     f"{ok}", o.tolist(), textColorRGB=col_origin, textSize=1.2, lifeTime=0
                 )
-            )  
+            )
             self._task_line_ids.append(
                 p.addUserDebugText(
                     f"{tk}", t.tolist(), textColorRGB=col_target, textSize=1.2, lifeTime=0
                 )
-            )  
+            )
 
-        # Keep the tiny sphere visual handle alive (it’s owned by markers; OK to leave)  
+        # Keep the tiny sphere visual handle alive (it’s owned by markers; OK to leave)
 
 
 class ClothEnvBullet(BulletClothEnv_, EzPickle):

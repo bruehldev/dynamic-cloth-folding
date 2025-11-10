@@ -78,7 +78,7 @@ _DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/cloth_z_up",
+        "obj_dir_fallback": "assets/cloth/grid_20251103_145100_0000",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
@@ -146,7 +146,7 @@ _DEFAULTS = {
         "ang_damping": 0.1,
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
-        "workspace_limits_min": [-0.25, -0.25, 0.001],
+        "workspace_limits_min": [-0.25, -0.25, 0.0],
         "workspace_limits_max": [0.08, 0.08, 0.20],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
@@ -200,6 +200,8 @@ _DEFAULTS = {
     "frame_stack_size": 1,
     "control_frequency": 10.0,
     "output_max": 0.03,
+    "near_goal_radius": 0.06,
+    "min_action_scale": 0.25,
     "robot_observation": "ctrl",
     "max_close_steps": 10,
     "image_obs_noise_mean": 0.5,
