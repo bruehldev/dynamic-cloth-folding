@@ -147,7 +147,7 @@ _DEFAULTS = {
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
         "workspace_limits_min": [-0.25, -0.25, 0.001],
-        "workspace_limits_max": [0.08, 0.08, 0.08],
+        "workspace_limits_max": [0.08, 0.08, 0.20],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
         # NEW: Panda specifics
@@ -195,7 +195,7 @@ _DEFAULTS = {
     # deterministic fallback if DR is OFF
     "gravity": [0.0, 0.0, -9.81],
     # --- Environment settings ---
-    "task_name": "sideways",
+    "task_name": "diagonal",
     "image_size": 100,
     "frame_stack_size": 1,
     "control_frequency": 10.0,

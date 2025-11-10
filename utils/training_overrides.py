@@ -99,4 +99,8 @@ def apply_training_env_overrides(variant: TrainingConfigBase) -> dict:
                 "batch_size must be <= num_expl_steps_per_train_loop"
             )
 
+    train_task = os.getenv("TASK")
+    if train_task is not None:
+        variant["randomization_kwargs"]["task_name"] = train_task
+
     return variant
