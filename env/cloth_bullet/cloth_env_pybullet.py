@@ -1,3 +1,4 @@
+import contextlib
 import os
 from collections import deque
 from multiprocessing import current_process
@@ -85,6 +86,7 @@ class BulletClothEnv_:
         self.world = PyBulletWorld(self.has_viewer, self.timestep, self.kwargs)
         self.camera = Camera(self.image_size, self.kwargs)
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
+        self._constraint_line_ids = []  # GUI: ids of origin→target lines
         self._ws_vis_id = None  # Debug: id of the translucent workspace box
         self._ws_line_ids = []  # Debug: store wireframe line ids so we can clear them
         self._task_line_ids = []  # Debug: debug lines (origin→target / origin→goal)
@@ -207,7 +209,6 @@ class BulletClothEnv_:
         center_v_name = self.cloth.corner_v_names["mid"]
         self._camera_target = self.cloth.get_positions_W()[center_v_name]
         self.camera.begin_episode(self._camera_target)
-        # self.camera.print_gui_camera_as_type()
         # (Keep rendering OFF until the end of reset)
 
         # Initialize the task
@@ -274,6 +275,13 @@ class BulletClothEnv_:
             hi = np.array(cloth_cfg["color_hi"])
             self.cloth.set_color((self.np_random.uniform(lo, hi)).tolist())
 
+        # ---- Draw per-constraint origin→target lines in the GUI ----
+        # try:
+        #    if self.has_viewer:
+        #        self._draw_constraint_lines()
+        # except Exception:
+        #    pass
+
         # ---- Visualize the active task in the GUI (origins, targets, goal rays) ----
         # try:
         #    self._draw_task_visuals()
@@ -316,7 +324,6 @@ class BulletClothEnv_:
             pass
         return self.get_obs()
 
-
     def step(self, action):
         raw_action = action.copy()
         self.previous_raw_action = raw_action.copy()
@@ -358,6 +365,11 @@ class BulletClothEnv_:
         reward, done, info = self._get_reward_and_done(obs, raw_action)
 
         self.current_step += 1
+
+        # Update constraint lines once per environment step (cheap + avoids flicker)
+        # with contextlib.suppress(Exception):
+        #    if self.has_viewer:
+        #        self._draw_constraint_lines()
 
         # try:
         #    if self.has_viewer:
@@ -799,6 +811,37 @@ class BulletClothEnv_:
             basePosition=center.tolist(),
             baseOrientation=[0, 0, 0, 1],
         )
+
+    # ---------------- Task visualization: constraint lines ----------------
+    def _draw_constraint_lines(self):
+        """Draw a line from each constraint's origin site to its target site (world frame)."""
+        # Clear previous lines
+        for _id in getattr(self, "_constraint_line_ids", []):
+            with contextlib.suppress(Exception):
+                p.removeUserDebugItem(_id)
+        self._constraint_line_ids = []
+
+        # Current world positions of relevant cloth sites
+        verts_W = self.cloth.get_positions_W()  # dict: v_* -> [x,y,z]
+        sites = self.cloth.sites  # site name -> vertex key (e.g., "S0_8" -> "v_123")
+
+        # Draw a thin white line origin→target for each constraint
+        for c in self.task.constraints:
+            o_name = c["origin"]
+            t_name = c["target"]
+            o_key = sites[o_name]
+            t_key = sites[t_name]
+            o_pos = verts_W[o_key].tolist()
+            t_pos = verts_W[t_key].tolist()
+            self._constraint_line_ids.append(
+                p.addUserDebugLine(
+                    o_pos,
+                    t_pos,
+                    [0.9, 0.9, 0.9],  # white-ish
+                    lineWidth=2.0,
+                    lifeTime=0,
+                )
+            )
 
     # ---------------- Task visualization helpers (non-physics) ----------------
     def _draw_task_visuals(self):

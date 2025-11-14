@@ -12,4 +12,5 @@
   "editor.formatOnSave": true,
   "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
   "ruff.importStrategy": "fromEnvironment",
+  "python-envs.pythonProjects": []
 }

@@ -32,16 +32,27 @@ gym.logger.set_level(50)
 logger = logging.getLogger(__name__)
 
 PhysicsBackend = Literal["mujoco", "bullet"]
-BACKEND: PhysicsBackend = os.getenv("PHYSICS").lower()
+BACKEND: PhysicsBackend = os.getenv("PHYSICS").lower() if os.getenv("PHYSICS") else "bullet"
 
 
 def experiment(variant: TrainingConfigBase):
     if BACKEND == "mujoco":
         from env import cloth_env
 
+        # Enable parity logging by setting LOG_MJ_PARITY=1
+        LOG_MJ_PARITY = os.getenv("LOG_MJ_PARITY", "0") == "1"
+        if LOG_MJ_PARITY:
+            # Local import to avoid dependency when not logging
+            from mujoco_parity_logger import MuJoCoParityLogger
+
         eval_env = cloth_env.ClothEnv(
             **variant["env_kwargs"], randomization_kwargs=variant["randomization_kwargs"]
         )
+        if LOG_MJ_PARITY:
+            log_dir = os.path.join(variant["save_folder"], "parity_mujoco")
+            # Wrap the raw env so all future resets/steps are logged;
+            # NormalizedBoxEnv will sit *on top* of this logger.
+            eval_env = MuJoCoParityLogger(eval_env, log_dir=log_dir)
         randomized_eval_env = general_utils.get_randomized_env(
             wrappers.NormalizedBoxEnv(eval_env),
             randomization_kwargs=variant["randomization_kwargs"],
@@ -56,6 +67,19 @@ def experiment(variant: TrainingConfigBase):
             randomization_kwargs=variant["randomization_kwargs"],
             logger=rlkit_logger,
         )
+        # Enable parity logging by setting LOG_BULLET_PARITY=1
+        LOG_BULLET_PARITY = os.getenv("LOG_BULLET_PARITY", "0") == "1"
+        if LOG_BULLET_PARITY:
+            from bullet_parity_logger import BulletParityLogger
+
+            log_dir = os.path.join(variant["save_folder"], "parity_bullet")
+            eval_env = BulletParityLogger(eval_env, log_dir=log_dir)
+            # Create reset.json immediately (harmless extra reset for the eval env)
+            try:
+                eval_env.reset()
+            except Exception:
+                pass
+
         wrapped_eval_env = wrappers.NormalizedBoxEnv(eval_env)
         randomized_eval_env = wrapped_eval_env
         env_keys, env_dims = bullet_utils.get_keys_and_dims(

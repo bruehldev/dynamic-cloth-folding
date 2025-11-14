@@ -78,18 +78,18 @@ _DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/cloth_z_up",
+        "obj_dir_fallback": "assets/cloth/grid_7",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         "scale_range": [0.10, 0.15],  # used when DR is ON
-        "scale": 0.0974,  # deterministic fallback used when DR is OFF
+        "scale": 0.1474,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 1.5],
-        "friction": 1.0,  # deterministic fallback if DR is OFF
-        "mass": 1.0,
+        "friction": 1.2,  # deterministic fallback if DR is OFF
+        "mass": 1.4,
         "base_clearance": 0.05,
         "extra_clearance_slope": 0.35,
         "scale_clip_range": [0.10, 0.38],
@@ -99,14 +99,14 @@ _DEFAULTS = {
         "useMassSpring": 1,
         "spring_k_range": [30.0, 60.0],
         "spring_c_range": [0.08, 0.15],
-        "spring_k": 40.0,  # deterministic fallback if DR is OFF
+        "spring_k": 65.0,  # deterministic fallback if DR is OFF
         "spring_c": 0.1,  # deterministic fallback if DR is OFF
-        "damping_all_dirs": 1,
+        "damping_all_dirs": 50,
         "useSelfCollision": 1,
         "useFaceContact": 1,
         "collision_margin_range": [0.012, 0.014],
-        "collision_margin": 0.014,
-        "settle_steps": 60,
+        "collision_margin": 0.012,
+        "settle_steps": 120,
         "thickness": 0.002,
     },
     "table": {

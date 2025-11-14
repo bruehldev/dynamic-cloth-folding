@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug train.py",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/train.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PHYSICS": "mujoco",
+        "WITH_GUI": "0",
+        "NUM_PROCS": "1"
+      },
+      "args": [
+        // put CLI args for train.py here if needed, e.g. "--lr", "0.0003"
+      ]
+    }
+  ]
+}
