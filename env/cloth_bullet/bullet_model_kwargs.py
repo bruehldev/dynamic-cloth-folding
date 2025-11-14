@@ -31,15 +31,15 @@ _DEFAULTS = {
     "lookat_position_randomization_radius": 0.01,
     "camera_config": {
         "type": "default",  # one of: default, side, front, up, all
-        "train_camera_fovy": 60.0,
-        "fovy_range": [55.0, 65.0],
+        "train_camera_fovy": 14.0,
+        "fovy_range": [13.0, 15.0],
         "near_clip": 0.01,
         "far_clip": 5.0,
         "jitter_xyz": [0.01, 0.01, 0.01],
         "target_lookat_pos": [0.49476399, 0.00668401, 0.13310541],
         "types": {
             "default": {
-                "eye": [0.20442, -0.24969, 0.25107],
+                "eye": [-0.16178, -0.96113, 0.91955],
                 "up": [0.0, 0.0, 1.0],
             },
             "side": {"eye": [-0.4, -0.7, 0.65], "up": [0.0, 0.0, 1.0]},
@@ -78,14 +78,14 @@ _DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/grid_20251103_145100_0000",
+        "obj_dir_fallback": "assets/cloth/cloth_z_up",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         "scale_range": [0.10, 0.15],  # used when DR is ON
-        "scale": 0.10,  # deterministic fallback used when DR is OFF
+        "scale": 0.0974,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 1.5],
         "friction": 1.0,  # deterministic fallback if DR is OFF
@@ -195,14 +195,14 @@ _DEFAULTS = {
     # deterministic fallback if DR is OFF
     "gravity": [0.0, 0.0, -9.81],
     # --- Environment settings ---
-    "task_name": "diagonal",
+    "task_name": "sideways",
     "image_size": 100,
     "frame_stack_size": 1,
     "control_frequency": 10.0,
     "output_max": 0.03,
     "near_goal_radius": 0.06,
     "min_action_scale": 0.25,
-    "robot_observation": "ctrl",
+    "robot_observation": "ee",
     "max_close_steps": 10,
     "image_obs_noise_mean": 0.5,
     "image_obs_noise_std": 0.5,

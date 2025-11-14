@@ -43,7 +43,7 @@ class Camera:
             self.center = self.center + [np.random.uniform(-r, r), np.random.uniform(-r, r), 0.0]
         self._episode_center = self.center
         # Use the configured FOV and the “default” camera type (stable)
-        self._fov = float(self._cam_cfg["train_camera_fovy"])
+        # self._fov = float(self._cam_cfg["train_camera_fovy"])
         cam_type = self._cam_cfg["type"]
         if cam_type == "all":
             # If any camera-related DR is on, allow random choice. Otherwise, use default.

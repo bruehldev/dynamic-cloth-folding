@@ -63,7 +63,7 @@ class DeformableCloth:
                 mesh_path_to_load = self.cloth_cfg["mesh_path"]
 
         self.mesh_path = mesh_path_to_load
-        self.logger.log(f"LOG:cloth_mesh_path: {self.mesh_path}")
+        # self.logger.log(f"LOG:cloth_mesh_path: {self.mesh_path}")
 
         def _load(scale_val):
             # Hard render guard: ensure GUI can't draw while spawning the soft body
