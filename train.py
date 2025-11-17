@@ -51,6 +51,8 @@ def experiment(variant: TrainingConfigBase):
     else:
         from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
 
+        variant["env_kwargs"]["timestep"] = 1.0 / 480.0
+
         eval_env = ClothEnv(
             **variant["env_kwargs"],
             randomization_kwargs=variant["randomization_kwargs"],

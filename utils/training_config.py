@@ -178,7 +178,6 @@ class RandomizationKwargs(TypedDict, total=False):
     lights: LightsConfig
 
     cloth_size: float
-    mujoco_size_lock: bool
 
     cloth: ClothConfig
     table: TableConfig

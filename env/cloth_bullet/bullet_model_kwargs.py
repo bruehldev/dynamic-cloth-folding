@@ -62,7 +62,6 @@ _DEFAULTS = {
     # geometry sizing (global fallback used by cloth if cloth.scale_range is missing)
     "cloth_size_range": [0.10, 0.2],  # DEPRECATED: use cloth.scale_range
     "cloth_size": 0.26,  # DEPRECATED: use cloth.scale
-    "mujoco_size_lock": True,  # keep Bullet cloth visually consistent with MuJoCo cloth_size
     # per-object sections
     "cloth": {
         "uv": {
@@ -78,34 +77,34 @@ _DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/cloth_z_up",
+        "obj_dir_fallback": "assets/cloth/grid_9",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         "scale_range": [0.10, 0.15],  # used when DR is ON
-        "scale": 0.0974,  # deterministic fallback used when DR is OFF
+        "scale": 0.1,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 1.5],
-        "friction": 1.0,  # deterministic fallback if DR is OFF
-        "mass": 1.0,
+        "friction": 0.5,  # deterministic fallback if DR is OFF
+        "mass": 0.5,
         "base_clearance": 0.05,
         "extra_clearance_slope": 0.35,
         "scale_clip_range": [0.10, 0.38],
         "initial_pos": [0.5, 0.0],
-        "useNeoHookean": 0,
-        "useBendingSprings": 1,
-        "useMassSpring": 1,
-        "spring_k_range": [30.0, 60.0],
+        "useNeoHookean": False,
+        "useBendingSprings": True,
+        "useMassSpring": True,
+        "springElasticStiffness_range": [30.0, 60.0],
         "spring_c_range": [0.08, 0.15],
-        "spring_k": 40.0,  # deterministic fallback if DR is OFF
+        "springElasticStiffness": 40.0,  # deterministic fallback if DR is OFF
         "spring_c": 0.1,  # deterministic fallback if DR is OFF
-        "damping_all_dirs": 1,
-        "useSelfCollision": 1,
-        "useFaceContact": 1,
-        "collision_margin_range": [0.012, 0.014],
-        "collision_margin": 0.014,
+        "springDampingAllDirections": False,
+        "useSelfCollision": True,
+        "useFaceContact": True,
+        "collisionMargin_range": [0.012, 0.014],
+        "collisionMargin": 0.004,
         "settle_steps": 60,
         "thickness": 0.002,
     },
@@ -187,8 +186,16 @@ _DEFAULTS = {
         "residual_thresh_range": [1e-6, 1e-4],
         "restitution_vel_thresh_range": [0.0, 0.5],
         "contact_breaking_threshold_range": [0.02, 0.08],
-        "sparseSdfVoxelSize": 0.10,
+        "sparseSdfVoxelSize": 0.25,
         "sparse_sdf_voxel_size_range": [0.08, 0.12],
+        # deterministic fallback
+        "erp": 0.25,
+        "contactERP": 0.25,
+        "numSolverIterations": 50,
+        "globalCFM": 1e-5,
+        "solverResidualThreshold": 1e-5,
+        "restitutionVelocityThreshold": 0.25,
+        "contactBreakingThreshold": 0.05,
     },
     "gravity_randomization": True,
     "gravity_range": [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]],
@@ -196,6 +203,7 @@ _DEFAULTS = {
     "gravity": [0.0, 0.0, -9.81],
     # --- Environment settings ---
     "task_name": "sideways",
+    "timestep": 1.0 / 480.0,
     "image_size": 100,
     "frame_stack_size": 1,
     "control_frequency": 10.0,
@@ -271,16 +279,16 @@ def make_bullet_randomization_kwargs(
     assert "useNeoHookean" in cfg["cloth"]
     assert "useBendingSprings" in cfg["cloth"]
     assert "useMassSpring" in cfg["cloth"]
-    assert "damping_all_dirs" in cfg["cloth"]
+    assert "springDampingAllDirections" in cfg["cloth"]
     assert "useSelfCollision" in cfg["cloth"]
     assert "useFaceContact" in cfg["cloth"]
     assert "settle_steps" in cfg["cloth"]
-    assert "spring_k_range" in cfg["cloth"]
-    assert "spring_k" in cfg["cloth"]
+    assert "springElasticStiffness_range" in cfg["cloth"]
+    assert "springElasticStiffness" in cfg["cloth"]
     assert "spring_c_range" in cfg["cloth"]
     assert "spring_c" in cfg["cloth"]
-    assert "collision_margin_range" in cfg["cloth"]
-    assert "collision_margin" in cfg["cloth"]
+    assert "collisionMargin_range" in cfg["cloth"]
+    assert "collisionMargin" in cfg["cloth"]
     assert "type" in cfg["camera_config"]
     assert "train_camera_fovy" in cfg["camera_config"]
     assert "fovy_range" in cfg["camera_config"]

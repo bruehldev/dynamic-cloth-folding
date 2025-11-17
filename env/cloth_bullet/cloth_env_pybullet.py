@@ -208,7 +208,6 @@ class BulletClothEnv_:
         self._camera_target = self.cloth.get_positions_W()[center_v_name]
         self.camera.begin_episode(self._camera_target)
         # self.camera.print_gui_camera_as_type()
-        # (Keep rendering OFF until the end of reset)
 
         # Initialize the task
         self.task = FoldingTask(
@@ -315,7 +314,6 @@ class BulletClothEnv_:
         except Exception:
             pass
         return self.get_obs()
-
 
     def step(self, action):
         raw_action = action.copy()
@@ -677,12 +675,6 @@ class BulletClothEnv_:
         """
         if aux_output is None:
             print("[Bullet] capture_images: aux_output is None", flush=True)
-
-        w_eval, h_eval = 500, 500
-        w_corners, h_corners = 500, 500
-        w_cnn, h_cnn = self.image_size
-        # In Bullet, full buffer size lives under render_size
-        w_cnn_full, h_cnn_full = self.camera.render_size
 
         ee_in_image = np.ones(4)
         ee_pos = self.get_ee_position_W()

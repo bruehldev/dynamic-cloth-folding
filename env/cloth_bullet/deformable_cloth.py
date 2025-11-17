@@ -28,14 +28,14 @@ class DeformableCloth:
         # Determine physics properties based on DR mode
         if self.randomization_kwargs["dynamics_randomization"]:
             friction = float(np.random.uniform(*self.cloth_cfg["friction_range"]))
-            spring_k = float(np.random.uniform(*self.cloth_cfg["spring_k_range"]))
+            spring_k = float(np.random.uniform(*self.cloth_cfg["springElasticStiffness_range"]))
             spring_c = float(np.random.uniform(*self.cloth_cfg["spring_c_range"]))
-            collision_margin = float(np.random.uniform(*self.cloth_cfg["collision_margin_range"]))
+            collision_margin = float(np.random.uniform(*self.cloth_cfg["collisionMargin_range"]))
         else:
             friction = float(self.cloth_cfg["friction"])
-            spring_k = float(self.cloth_cfg["spring_k"])
+            spring_k = float(self.cloth_cfg["springElasticStiffness"])
             spring_c = float(self.cloth_cfg["spring_c"])
-            collision_margin = float(self.cloth_cfg["collision_margin"])
+            collision_margin = float(self.cloth_cfg["collisionMargin"])
 
         # --- Select cloth mesh based on randomization ---
         mesh_path_to_load = None
@@ -79,7 +79,7 @@ class DeformableCloth:
                 useMassSpring=self.cloth_cfg["useMassSpring"],
                 springElasticStiffness=spring_k,
                 springDampingStiffness=spring_c,
-                springDampingAllDirections=self.cloth_cfg["damping_all_dirs"],
+                springDampingAllDirections=self.cloth_cfg["springDampingAllDirections"],
                 useSelfCollision=self.cloth_cfg["useSelfCollision"],
                 frictionCoeff=friction,
                 useFaceContact=self.cloth_cfg["useFaceContact"],

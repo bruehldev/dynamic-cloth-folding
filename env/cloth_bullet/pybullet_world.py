@@ -80,10 +80,10 @@ class PyBulletWorld:
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
 
     def _setup_simulation_physics(self):
+        p.setRealTimeSimulation(0)
         p.setTimeStep(self.timestep)
         # --- use cached gravity every reset ---
         p.setGravity(*self.gravity_vec)
-        # p.setPhysicsEngineParameter(enableFileCaching=0)
 
     def step(self):
         p.stepSimulation()
@@ -208,31 +208,18 @@ class PyBulletWorld:
             return float(0.5 * (r[0] + r[1]))
 
         params = {
-            "erp": mid(phys["erp_range"]),
-            "contactERP": mid(phys["contact_erp_range"]),
-            "numSolverIterations": int(round(mid(phys["solver_iters_range"]))),
-            "globalCFM": mid(phys["global_cfm_range"]),
-            "solverResidualThreshold": mid(phys["residual_thresh_range"]),
-            "restitutionVelocityThreshold": mid(phys["restitution_vel_thresh_range"]),
-            "contactBreakingThreshold": mid(phys["contact_breaking_threshold_range"]),
-            "sparseSdfVoxelSize": mid(phys["sparse_sdf_voxel_size_range"]),
+            "erp": phys["erp"],
+            "contactERP": phys["contactERP"],
+            "numSolverIterations": phys["numSolverIterations"],
+            "globalCFM": phys["globalCFM"],
+            "solverResidualThreshold": phys["solverResidualThreshold"],
+            "restitutionVelocityThreshold": phys["restitutionVelocityThreshold"],
+            "contactBreakingThreshold": phys["contactBreakingThreshold"],
+            "sparseSdfVoxelSize": phys["sparseSdfVoxelSize"],
         }
         for k, v in params.items():
-            try:
-                p.setPhysicsEngineParameter(**{k: v})
-                self._last_phys_params[k] = v
-            except Exception:
-                pass
-
-    def get_physics_snapshot(self):
-        """
-        Return the latest physics parameters we *actually* set (for logging),
-        plus gravity and timestep.
-        """
-        snap = dict(self._last_phys_params)
-        snap["gravity"] = tuple(getattr(self, "gravity_vec", (0.0, 0.0, -9.81)))
-        snap["timestep"] = float(self.timestep)
-        return snap
+            p.setPhysicsEngineParameter(**{k: v})
+            self._last_phys_params[k] = v
 
     def close(self):
         with contextlib.suppress(Exception):
