@@ -63,7 +63,7 @@ class BulletClothEnv_:
         self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
         self.filter = float(self.kwargs["ctrl_filter"])
         steps_per_second = 1.0 / self.timestep
-        self.between_steps = int(1000.0 / steps_per_second)
+        self.between_steps = max(1, int(1000.0 / steps_per_second))
         self.output_max = float(self.kwargs["output_max"])
         self.robot_observation = str(self.kwargs["robot_observation"])
         self.max_close_steps = int(self.kwargs["max_close_steps"])
@@ -558,7 +558,7 @@ class BulletClothEnv_:
             cloth_obs = np.concatenate([cloth_obs, np.array(physics_params, dtype=np.float32)])
 
         ee_pos_W = self.robot.get_ee_position_W()
-        ee_vel_W = (ee_pos_W - self._prev_ee_pos_W) / max(self.timestep, 1e-6)
+        ee_vel_W = self.get_ee_velocity()
         self._prev_ee_pos_W = ee_pos_W
         ee_pos_I = ee_pos_W - self.relative_origin
 
@@ -599,10 +599,10 @@ class BulletClothEnv_:
         return self.robot.get_ee_position_W() - self.relative_origin
 
     def get_ee_velocity(self):
-        ee_pos_W = self.robot.get_ee_position_W()
-        ee_vel_W = (ee_pos_W - self._prev_ee_pos_W) / max(self.timestep, 1e-6)
-        # Note: _prev_ee_pos_W is already updated in get_obs, which is called every step.
-        return ee_vel_W
+        # Retrieve linear velocity (index 6) from LinkState
+        # computeLinkVelocity=1 is required in recent PyBullet versions
+        ls = p.getLinkState(self.robot.robot_id, self.robot.ee_link_index, computeLinkVelocity=1)
+        return np.array(ls[6], dtype=np.float32)
 
     def get_joint_positions(self):
         return self.robot.get_joint_positions()

@@ -77,7 +77,7 @@ _DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/grid_9",
+        "obj_dir_fallback": "assets/cloth/cloth_z_up",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
@@ -159,7 +159,7 @@ _DEFAULTS = {
             2.37451,
             -1.50499,
         ],
-        "arm_control": {"position_gain": 0.25, "velocity_gain": 1.0, "max_force_scale": 1.0},
+        "arm_control": {"position_gain": 1.0, "velocity_gain": 1.0, "max_force_scale": 1.0},
         "finger": {"closed_pos": 0.0, "max_force": 30.0, "kp": 1.0, "max_vel": 0.5},
         "ik": {
             "max_iters": 100,
