@@ -149,7 +149,6 @@ _DEFAULTS = {
         "workspace_limits_max": [0.08, 0.08, 0.20],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
-        # NEW: Panda specifics
         "urdf_path": "franka_panda/panda.urdf",
         "init_joint_positions": [
             0.212422,
@@ -167,13 +166,6 @@ _DEFAULTS = {
             "residual_threshold": 1e-4,
             "use_orientation": True,
             "target_euler_rpy": [0.0, 3.14159265, 0.0],  # “tool-down” (world Y-rotation of pi)
-            # Alternatively: "target_quat_xyzw": [x, y, z, w]
-        },
-        "lift_fold_arc": {
-            "enabled": True,
-            "xy_travel_dist": 0.25,
-            "z_start_offset": 0.03,
-            "z_end_offset": 0.10,
         },
     },
     # world-level physics randomization
@@ -191,7 +183,7 @@ _DEFAULTS = {
         # deterministic fallback
         "erp": 0.25,
         "contactERP": 0.25,
-        "numSolverIterations": 50,
+        "numSolverIterations": 100,
         "globalCFM": 1e-5,
         "solverResidualThreshold": 1e-5,
         "restitutionVelocityThreshold": 0.25,
@@ -203,7 +195,6 @@ _DEFAULTS = {
     "gravity": [0.0, 0.0, -9.81],
     # --- Environment settings ---
     "task_name": "sideways",
-    "timestep": 1.0 / 480.0,
     "image_size": 100,
     "frame_stack_size": 1,
     "control_frequency": 10.0,
@@ -224,9 +215,6 @@ _DEFAULTS = {
         "fail_reward": -1.0,
         "extra_reward": 1.0,
     },
-    "debug_log_projection": True,  # print to terminal
-    "debug_save_projection_json": True,  # also save JSON files next to your runs
-    "debug_draw_named_corners": True,  # draws named-corner dots too (magenta)
 }
 
 
@@ -307,11 +295,6 @@ def make_bullet_randomization_kwargs(
     assert "direction" in cfg["lights"]
     assert "color" in cfg["lights"]
     assert "shadows" in cfg["lights"]
-    assert "lift_fold_arc" in cfg["robot"]
-    assert "enabled" in cfg["robot"]["lift_fold_arc"]
-    assert "xy_travel_dist" in cfg["robot"]["lift_fold_arc"]
-    assert "z_start_offset" in cfg["robot"]["lift_fold_arc"]
-    assert "z_end_offset" in cfg["robot"]["lift_fold_arc"]
     assert "sparse_dense" in cfg["folding_task"]
     assert "success_distance" in cfg["folding_task"]
     assert "goal_noise_range" in cfg["folding_task"]

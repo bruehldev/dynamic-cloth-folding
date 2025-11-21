@@ -138,7 +138,6 @@ class RobotConfig(TypedDict, total=False):
     workspace_limits_max: Vec3
     base_pos: Vec3
     base_orn_euler: Vec3
-    lift_fold_arc: LiftFoldArcConfig
 
 
 class PhysicsConfig(TypedDict, total=False):
