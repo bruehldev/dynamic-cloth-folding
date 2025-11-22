@@ -83,6 +83,7 @@ _DEFAULTS = {
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
         "obj_dir_fallback": "assets/cloth/cloth_z_up",
+        "disable_cloth": True,
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
@@ -150,8 +151,8 @@ _DEFAULTS = {
         "ang_damping": 0.1,
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
-        "workspace_limits_min": [-0.25, -0.25, 0.0],
-        "workspace_limits_max": [0.08, 0.08, 0.20],
+        "workspace_limits_min": [-0.25, -0.25, -0.40],
+        "workspace_limits_max": [0.08, 0.08, 0.40],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
         "urdf_path": "franka_panda/panda.urdf",
@@ -164,12 +165,12 @@ _DEFAULTS = {
             2.37451,
             -1.50499,
         ],
-        "arm_control": {"position_gain": 1.0, "velocity_gain": 1.0, "max_force_scale": 1.0},
+        "arm_control": {"position_gain": 1.0, "velocity_gain": 1.0, "max_force_scale": 3.0},
         "finger": {"closed_pos": 0.0, "max_force": 30.0, "kp": 1.0, "max_vel": 0.5},
         "ik": {
             "max_iters": 100,
             "residual_threshold": 1e-4,
-            "use_orientation": True,
+            "use_orientation": False,
             "target_euler_rpy": [0.0, 3.14159265, 0.0],  # “tool-down” (world Y-rotation of pi)
         },
     },
@@ -203,7 +204,7 @@ _DEFAULTS = {
     "image_size": 100,
     "frame_stack_size": 1,
     "control_frequency": 10.0,
-    "output_max": 0.03,
+    "output_max": 0.05,
     "near_goal_radius": 0.06,
     "min_action_scale": 0.25,
     "robot_observation": "ee",
@@ -262,6 +263,7 @@ def make_bullet_randomization_kwargs(
     assert "base_orn_euler" in cfg["robot"]
     assert "scale_range" in cfg["cloth"]
     assert "scale" in cfg["cloth"]
+    assert "disable_cloth" in cfg["cloth"]
     assert "scale_clip_range" in cfg["cloth"]
     assert "base_clearance" in cfg["cloth"]
     assert "extra_clearance_slope" in cfg["cloth"]

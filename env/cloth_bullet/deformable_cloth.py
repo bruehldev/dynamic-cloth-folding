@@ -25,6 +25,39 @@ class DeformableCloth:
         self.randomization_kwargs = randomization_kwargs
         self.logger = logger
 
+        # --- Check for disable flag ---
+        disable_flag = self.cloth_cfg.get("disable_cloth", False)
+        if isinstance(disable_flag, str):
+            disable_flag = disable_flag.lower() == "true"
+
+        if disable_flag:
+            self.cloth_id = None
+            self.scale = 1.0
+            self.mass = 0.0
+            self.springElasticStiffness = 0.0
+            self.springDampingStiffness = 0.0
+            self.frictionCoeff = 0.0
+            self.thickness = 0.0
+
+            # Create dummy vertices (grid) to satisfy downstream calls
+            cx, cy, cz = base_position
+            # Use scale to determine size of dummy cloth
+            scale = float(self.cloth_cfg.get("scale", 1.0))
+            half_size = 0.2 * scale
+            n = 10
+            xs = np.linspace(cx - half_size, cx + half_size, n)
+            ys = np.linspace(cy - half_size, cy + half_size, n)
+            verts = []
+            for y in ys:
+                for x in xs:
+                    verts.append([x, y, cz])
+            self._dummy_verts = np.array(verts, dtype=np.float32)
+            self._prev_verts_W = self._dummy_verts.copy()
+
+            self.find_corners()
+            self.compute_sites()
+            return
+
         # Determine physics properties based on DR mode
         if self.randomization_kwargs["dynamics_randomization"]:
             friction = float(np.random.uniform(*self.cloth_cfg["friction_range"]))
@@ -143,6 +176,8 @@ class DeformableCloth:
 
     def get_raw_vertex_positions(self):
         """Returns the raw vertex positions as a numpy array."""
+        if getattr(self, "cloth_id", None) is None:
+            return self._dummy_verts
         mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
         return np.array(mesh[1], dtype=np.float32)
 
@@ -212,11 +247,15 @@ class DeformableCloth:
 
     def create_anchor(self, vertex_name, robot_id, link_id):
         """Creates a soft body anchor between a cloth vertex and a robot link."""
+        if getattr(self, "cloth_id", None) is None:
+            return
         vertex_index = int(vertex_name.split("_")[1])
         p.createSoftBodyAnchor(self.cloth_id, vertex_index, robot_id, link_id, [0, 0, 0])
 
     def set_color(self, rgba):
         self.color = list(map(float, rgba))
+        if getattr(self, "cloth_id", None) is None:
+            return
         # Preserve the current texture if one is applied
         if getattr(self, "_texture_applied", False) and self._texture_id is not None:
             p.changeVisualShape(
