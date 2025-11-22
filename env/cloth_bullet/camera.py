@@ -72,6 +72,10 @@ class Camera:
         eye = cam_spec["eye"]
         up = cam_spec["up"]
 
+        # If explicit absolute flag is set, use it
+        if cam_spec.get("is_absolute", False):
+            return eye, up
+
         # If any camera-related DR is on, treat eye as an offset.
         is_dr_active = (
             self.randomization_kwargs["camera_position_randomization"]
@@ -232,10 +236,24 @@ class Camera:
         """
         W_render, H_render = self.render_size
         cam_spec = self._cam_cfg["types"][cam_type]
-        # Stable path: treat eye as an OFFSET from the current center (keeps eval view on the cloth)
-        eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
+
+        # Check for explicit absolute positioning flag, or default to relative (offset from center)
+        if cam_spec.get("is_absolute", False):
+            eye = cam_spec["eye"]
+        else:
+            # Stable path: treat eye as an OFFSET from the current center (keeps eval view on the cloth)
+            eye = (
+                np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)
+            ).tolist()
+
         up = cam_spec["up"]
-        fov = float(self._cam_cfg["train_camera_fovy"])
+
+        # Allow per-camera FOV override
+        if "fov" in cam_spec:
+            fov = float(cam_spec["fov"])
+        else:
+            fov = float(self._cam_cfg["train_camera_fovy"])
+
         # If we want the full frame to match the policy crop FOV, shrink the FOV
         # by the crop fraction (H_out/H_render). This reproduces the crop without resizing.
         if crop_to_policy:
@@ -252,9 +270,21 @@ class Camera:
         """Return eye, up, fov, aspect, near, far for a given stable cam_type."""
         W_render, H_render = self.render_size
         cam_spec = self._cam_cfg["types"][cam_type]
-        eye = (np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)).tolist()
+
+        if cam_spec.get("is_absolute", False):
+            eye = cam_spec["eye"]
+        else:
+            eye = (
+                np.array(center_w, dtype=float) + np.array(cam_spec["eye"], dtype=float)
+            ).tolist()
+
         up = cam_spec["up"]
-        fov = float(self._cam_cfg["train_camera_fovy"])
+
+        if "fov" in cam_spec:
+            fov = float(cam_spec["fov"])
+        else:
+            fov = float(self._cam_cfg["train_camera_fovy"])
+
         if crop_to_policy:
             frac = self.image_size[1] / self.render_size[1]
             fov = float(2.0 * np.degrees(np.arctan(np.tan(np.radians(fov) / 2.0) * frac)))
