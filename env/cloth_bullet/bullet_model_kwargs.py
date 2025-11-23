@@ -3,7 +3,7 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 # Default DR configuration for the Bullet backend.
-_DEFAULTS = {
+RANDOMIZATION_DEFAULTS = {
     # image & rendering
     "physics_backend": "bullet",
     "render_size": [500, 500],  # [W, H]
@@ -83,6 +83,7 @@ _DEFAULTS = {
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
         "obj_dir_fallback": "assets/cloth/cloth_z_up",
+        "disable_cloth": True,
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
@@ -145,13 +146,13 @@ _DEFAULTS = {
     "robot": {
         # used by cloth_env_pybullet.reset() when DR master is on
         "lin_damping_range": [0.0, 0.2],
-        "lin_damping": 0.1,
+        "lin_damping": 0.3,
         "ang_damping_range": [0.0, 0.2],
-        "ang_damping": 0.1,
+        "ang_damping": 0.3,
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
-        "workspace_limits_min": [-0.25, -0.25, 0.0],
-        "workspace_limits_max": [0.08, 0.08, 0.20],
+        "workspace_limits_min": [-0.25, -0.25, -0.40],
+        "workspace_limits_max": [0.08, 0.08, 0.40],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
         "urdf_path": "franka_panda/panda.urdf",
@@ -164,7 +165,7 @@ _DEFAULTS = {
             2.37451,
             -1.50499,
         ],
-        "arm_control": {"position_gain": 1.0, "velocity_gain": 1.0, "max_force_scale": 1.0},
+        "arm_control": {"position_gain": 1.0, "velocity_gain": 1.0, "max_force_scale": 3.0},
         "finger": {"closed_pos": 0.0, "max_force": 30.0, "kp": 1.0, "max_vel": 0.5},
         "ik": {
             "max_iters": 100,
@@ -201,25 +202,32 @@ _DEFAULTS = {
     # --- Environment settings ---
     "task_name": "sideways",
     "image_size": 100,
-    "frame_stack_size": 1,
-    "control_frequency": 10.0,
-    "output_max": 0.03,
     "near_goal_radius": 0.06,
     "min_action_scale": 0.25,
-    "robot_observation": "ee",
-    "max_close_steps": 10,
+}
+
+ENV_DEFAULTS = {
+    "control_frequency": 10,
+    "ctrl_filter": 0.03,
+    "damping_ratio": 1,
+    "frame_stack_size": 1,
     "image_obs_noise_mean": 0.5,
     "image_obs_noise_std": 0.5,
+    "kp": 1000.0,
+    "max_close_steps": 10,
+    "model_kwargs_path": "./data/model_params.csv",
+    "output_max": 0.03,
+    "robot_observation": "ee",  # "ctrl" or "ee"
+    # "save_folder": "Generated value used from mujoco",
+    "timestep": 1.0 / 480.0,
     # --- Task settings ---
-    "folding_task": {
-        "sparse_dense": True,
-        "success_distance": 0.05,
-        "goal_noise_range": [0.0, 0.03],
-        "goal_noise": 0.0,
-        "success_reward": 0.0,
-        "fail_reward": -1.0,
-        "extra_reward": 1.0,
-    },
+    "fail_reward": -1.0,
+    "extra_reward": 1.0,
+    "goal_noise_range": [0.0, 0.03],
+    "goal_noise": 0.0,
+    "sparse_dense": True,
+    "success_distance": 0.05,
+    "success_reward": 0,
 }
 
 
@@ -240,7 +248,7 @@ def make_bullet_randomization_kwargs(
     Build the Bullet DR config.
     - Any keys in `overrides` are deep-merged into the defaults.
     """
-    cfg = deepcopy(_DEFAULTS)
+    cfg = deepcopy(RANDOMIZATION_DEFAULTS)
 
     # Assert that required keys exist to avoid silent failures
     assert "robot" in cfg
@@ -253,7 +261,6 @@ def make_bullet_randomization_kwargs(
     assert "lookat_position_randomization" in cfg
     assert "lookat_position_randomization_radius" in cfg
     assert "materials_randomization" in cfg
-    assert "folding_task" in cfg
     assert "world" in cfg  # static geometry defaults
     assert "viewer_debug_camera" in cfg
     assert "workspace_limits_min" in cfg["robot"]
@@ -262,6 +269,7 @@ def make_bullet_randomization_kwargs(
     assert "base_orn_euler" in cfg["robot"]
     assert "scale_range" in cfg["cloth"]
     assert "scale" in cfg["cloth"]
+    assert "disable_cloth" in cfg["cloth"]
     assert "scale_clip_range" in cfg["cloth"]
     assert "base_clearance" in cfg["cloth"]
     assert "extra_clearance_slope" in cfg["cloth"]
@@ -300,13 +308,6 @@ def make_bullet_randomization_kwargs(
     assert "direction" in cfg["lights"]
     assert "color" in cfg["lights"]
     assert "shadows" in cfg["lights"]
-    assert "sparse_dense" in cfg["folding_task"]
-    assert "success_distance" in cfg["folding_task"]
-    assert "goal_noise_range" in cfg["folding_task"]
-    assert "goal_noise" in cfg["folding_task"]
-    assert "success_reward" in cfg["folding_task"]
-    assert "fail_reward" in cfg["folding_task"]
-    assert "extra_reward" in cfg["folding_task"]
     assert "RGBShift" in cfg["albumentations_config"]
     assert "RandomBrightnessContrast" in cfg["albumentations_config"]
     assert "Blur" in cfg["albumentations_config"]
@@ -345,3 +346,38 @@ def make_bullet_randomization_kwargs(
         assert k in cfg["floor"]
 
     return _deep_merge(cfg, overrides or {})
+
+
+def make_env_kwargs(fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Build the Environment config (ENV_DEFAULTS).
+    - Any keys in `overrides` are deep-merged into the defaults.
+    """
+    # Start with the fallback (user provided config)
+    cfg = deepcopy(fallback or {})
+
+    # Merge ENV_DEFAULTS into cfg, so defaults OVERRIDE the fallback
+    _deep_merge(cfg, ENV_DEFAULTS)
+
+    # Assert that required keys exist
+    assert "control_frequency" in cfg
+    assert "ctrl_filter" in cfg
+    assert "damping_ratio" in cfg
+    assert "frame_stack_size" in cfg
+    assert "image_obs_noise_mean" in cfg
+    assert "image_obs_noise_std" in cfg
+    assert "kp" in cfg
+    assert "max_close_steps" in cfg
+    assert "model_kwargs_path" in cfg
+    assert "output_max" in cfg
+    assert "robot_observation" in cfg
+    assert "timestep" in cfg
+    assert "fail_reward" in cfg
+    assert "extra_reward" in cfg
+    assert "goal_noise_range" in cfg
+    assert "goal_noise" in cfg
+    assert "sparse_dense" in cfg
+    assert "success_distance" in cfg
+    assert "success_reward" in cfg
+
+    return cfg

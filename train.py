@@ -51,8 +51,6 @@ def experiment(variant: TrainingConfigBase):
     else:
         from env.cloth_bullet.cloth_env_pybullet import ClothEnvBullet as ClothEnv
 
-        variant["env_kwargs"]["timestep"] = 1.0 / 480.0
-
         eval_env = ClothEnv(
             **variant["env_kwargs"],
             randomization_kwargs=variant["randomization_kwargs"],
@@ -219,11 +217,16 @@ if __name__ == "__main__":
     variant["physics_backend"] = BACKEND
 
     if BACKEND == "bullet":
-        from env.cloth_bullet.bullet_model_kwargs import make_bullet_randomization_kwargs
+        from env.cloth_bullet.bullet_model_kwargs import (
+            make_bullet_randomization_kwargs,
+            make_env_kwargs,
+        )
 
         if os.getenv("WITH_GUI", "0") == "1":
             variant["env_kwargs"]["has_viewer"] = True
+
         variant["randomization_kwargs"] = make_bullet_randomization_kwargs()
+        variant["env_kwargs"] = make_env_kwargs(variant.get("env_kwargs", {}))
 
     variant = apply_training_env_overrides(variant)
 

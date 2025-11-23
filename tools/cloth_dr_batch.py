@@ -33,7 +33,7 @@ from cloth_tools import (
 
 from env.cloth_bullet import bullet_model_kwargs
 
-cloth_kwargs = bullet_model_kwargs._DEFAULTS["cloth"]
+cloth_kwargs = bullet_model_kwargs.RANDOMIZATION_DEFAULTS["cloth"]
 texture_dir = cloth_kwargs["texture_dir"]
 
 

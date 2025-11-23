@@ -93,15 +93,15 @@ class ClothConfig(TypedDict, total=False):
     useNeoHookean: Union[int, bool]
     useBendingSprings: Union[int, bool]
     useMassSpring: Union[int, bool]
-    spring_k_range: Vec2
+    springElasticStiffness_range: Vec2
     spring_c_range: Vec2
-    spring_k: float
+    springElasticStiffness: float
     spring_c: float
-    damping_all_dirs: Union[int, bool]
+    springDampingAllDirections: Union[int, bool]
     useSelfCollision: Union[int, bool]
     useFaceContact: Union[int, bool]
-    collision_margin_range: Vec2
-    collision_margin: float
+    collisionMargin_range: Vec2
+    collisionMargin: float
     settle_steps: int
 
 
@@ -150,19 +150,9 @@ class PhysicsConfig(TypedDict, total=False):
     contact_breaking_threshold_range: Vec2
 
 
-# ---------- folding task ----------
-class FoldingTaskConfig(TypedDict, total=False):
-    sparse_dense: bool
-    success_distance: float
-    goal_noise_range: Vec2
-    goal_noise: float
-    success_reward: float
-    fail_reward: float
-    extra_reward: float
-
-
 # ---------- randomization ----------
 class RandomizationKwargs(TypedDict, total=False):
+    physics_backend: str
     render_size: IVec2
     show_depth_preview: Union[int, bool]
     show_seg_preview: Union[int, bool]
@@ -177,6 +167,7 @@ class RandomizationKwargs(TypedDict, total=False):
     lights: LightsConfig
 
     cloth_size: float
+    cloth_size_range: Vec2
 
     cloth: ClothConfig
     table: TableConfig
@@ -192,15 +183,9 @@ class RandomizationKwargs(TypedDict, total=False):
 
     task_name: str  # e.g. "sideways"
     image_size: int
-    frame_stack_size: int
-    control_frequency: float
-    timestep: float
+    min_action_scale: float
+    near_goal_radius: float
     output_max: float
-    robot_observation: str  # e.g. "ctrl"
-    max_close_steps: int
-    image_obs_noise_mean: float
-    image_obs_noise_std: float
-    folding_task: FoldingTaskConfig
 
 
 # ---------- value / policy ----------
@@ -240,6 +225,7 @@ class EnvKwargs(TypedDict, total=False):
     output_max: float
     max_close_steps: int
     sparse_dense: bool
+    goal_noise: float
     goal_noise_range: Vec2 | Tuple[float, float]
     image_obs_noise_mean: float
     image_obs_noise_std: float
@@ -298,6 +284,7 @@ class TrainingConfigBase(TypedDict, total=False):
     title: str
     save_folder: str
     random_seed: int
+    physics_backend: str
 
     randomization_kwargs: RandomizationKwargs
     value_function_kwargs: ValueFunctionKwargs

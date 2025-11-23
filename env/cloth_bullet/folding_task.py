@@ -15,17 +15,25 @@ class FoldingTask:
         cloth,
         randomization_kwargs,
         np_random,
+        fail_reward,
+        extra_reward,
+        goal_noise,
+        goal_noise_range,
+        success_distance,
+        sparse_dense,
+        success_reward,
     ):
         self.cloth = cloth
         self.randomization_kwargs = randomization_kwargs
         self.np_random = np_random
-        task_cfg = self.randomization_kwargs["folding_task"]
 
-        self.success_distance = task_cfg["success_distance"]
-        self.sparse_dense = task_cfg["sparse_dense"]
-        self.success_reward = task_cfg["success_reward"]
-        self.fail_reward = task_cfg["fail_reward"]
-        self.extra_reward = task_cfg["extra_reward"]
+        self.success_distance = success_distance
+        self.sparse_dense = sparse_dense
+        self.success_reward = success_reward
+        self.goal_noise = goal_noise
+        self.goal_noise_range = goal_noise_range
+        self.fail_reward = fail_reward
+        self.extra_reward = extra_reward
 
         # --- Task Definition ---
         # This part mirrors the logic from the original MuJoCo environment's
@@ -77,13 +85,10 @@ class FoldingTask:
         This function replicates the logic from the original `sample_goal_I`.
         """
         goal = np.zeros(self.goal_dim * 3, dtype=np.float32)
-        task_cfg = self.randomization_kwargs["folding_task"]
         if self.randomization_kwargs["dynamics_randomization"]:
-            noise = self.np_random.uniform(
-                task_cfg["goal_noise_range"][0], task_cfg["goal_noise_range"][1]
-            )
+            noise = self.np_random.uniform(self.goal_noise_range[0], self.goal_noise_range[1])
         else:
-            noise = task_cfg["goal_noise"]
+            noise = self.goal_noise
 
         for i, c in enumerate(self.constraints):
             # cloth_pos_I is a dict keyed by site names (e.g., "S0_0")
