@@ -82,18 +82,17 @@ RANDOMIZATION_DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/cloth_z_up",
-        "disable_cloth": True,
+        "obj_dir_fallback": "assets/cloth/grid_9",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         "scale_range": [0.10, 0.15],  # used when DR is ON
-        "scale": 0.1,  # deterministic fallback used when DR is OFF
+        "scale": 0.15,  # deterministic fallback used when DR is OFF
         "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 1.5],
-        "friction": 0.5,  # deterministic fallback if DR is OFF
+        "friction": 1.0,  # deterministic fallback if DR is OFF
         "mass": 0.5,
         "base_clearance": 0.05,
         "extra_clearance_slope": 0.35,
@@ -104,7 +103,7 @@ RANDOMIZATION_DEFAULTS = {
         "useMassSpring": True,
         "springElasticStiffness_range": [30.0, 60.0],
         "spring_c_range": [0.08, 0.15],
-        "springElasticStiffness": 40.0,  # deterministic fallback if DR is OFF
+        "springElasticStiffness": 50.0,  # deterministic fallback if DR is OFF
         "spring_c": 0.1,  # deterministic fallback if DR is OFF
         "springDampingAllDirections": False,
         "useSelfCollision": True,
@@ -151,8 +150,8 @@ RANDOMIZATION_DEFAULTS = {
         "ang_damping": 0.3,
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
-        "workspace_limits_min": [-0.25, -0.25, -0.40],
-        "workspace_limits_max": [0.08, 0.08, 0.40],
+        "workspace_limits_min": [-0.4, -0.4, 0.00],
+        "workspace_limits_max": [0.07, 0.07, 0.15],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
         "urdf_path": "franka_panda/panda.urdf",
@@ -269,7 +268,6 @@ def make_bullet_randomization_kwargs(
     assert "base_orn_euler" in cfg["robot"]
     assert "scale_range" in cfg["cloth"]
     assert "scale" in cfg["cloth"]
-    assert "disable_cloth" in cfg["cloth"]
     assert "scale_clip_range" in cfg["cloth"]
     assert "base_clearance" in cfg["cloth"]
     assert "extra_clearance_slope" in cfg["cloth"]

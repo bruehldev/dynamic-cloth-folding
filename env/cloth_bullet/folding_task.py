@@ -58,13 +58,12 @@ class FoldingTask:
 
         # Make Bullet constraints use the real origin→target distance at reset time.
         # This mirrors MuJoCo where the goal is the target site position.
-        verts_W = self.cloth.get_positions_W()
         EPS = 1e-6
         for c in self.constraints:
-            v1 = self.cloth.sites[c["origin"]]
-            v2 = self.cloth.sites[c["target"]]
-            p1 = verts_W[v1]
-            p2 = verts_W[v2]
+            idx1 = self.cloth._site_indices[c["origin"]]
+            idx2 = self.cloth._site_indices[c["target"]]
+            p1 = self.cloth.get_position(idx1)
+            p2 = self.cloth.get_position(idx2)
             c["distance"] = float(max(EPS, np.linalg.norm(p2 - p1)))
 
         self.goal_dim = len(self.constraints)

@@ -220,12 +220,15 @@ class PandaRobot:
         ee_pos = np.array(ee[4], dtype=float)
         ee_orn = np.array(ee[5], dtype=float)
         pos_err = float(np.linalg.norm(ee_pos - getattr(self, "_last_ik_target_pos", ee_pos)))
-        orn_err = None
+        orn_err = 0.0
         if self.ik_use_orientation and hasattr(self, "_ik_target_quat"):
             # quaternion angle error (deg)
             dot = float(abs(np.dot(ee_orn, np.array(self._ik_target_quat))))
             dot = max(min(dot, 1.0), 0.0)
             orn_err = float(2.0 * np.arccos(dot) * 180.0 / np.pi)
+
+        self.last_pos_err = pos_err
+        self.last_orn_err = orn_err
 
     def force_fingers_closed(self):
         """Applies strong force to ensure fingers remain closed."""

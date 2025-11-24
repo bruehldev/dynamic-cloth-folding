@@ -17,15 +17,14 @@ class DeformableCloth:
         logger,
         target_edge_length=None,
     ):
-        """
-        If target_edge_length is given (meters), the cloth is scaled so that
-        its XY edge length matches target_edge_length (MuJoCo's cloth_size).
-        """
         self.cloth_cfg = cloth_cfg
         self.randomization_kwargs = randomization_kwargs
         self.logger = logger
 
-        # Determine physics properties based on DR mode
+        # --- State Cache ---
+        self._cached_verts_W = None
+
+        # Determine physics properties
         if self.randomization_kwargs["dynamics_randomization"]:
             friction = float(np.random.uniform(*self.cloth_cfg["friction_range"]))
             spring_k = float(np.random.uniform(*self.cloth_cfg["springElasticStiffness_range"]))
@@ -37,39 +36,33 @@ class DeformableCloth:
             spring_c = float(self.cloth_cfg["spring_c"])
             collision_margin = float(self.cloth_cfg["collisionMargin"])
 
-        # --- Select cloth mesh based on randomization ---
+        # Select mesh
         mesh_path_to_load = None
         if self.randomization_kwargs["materials_randomization"]:
             obj_dir = self.cloth_cfg.get("obj_dir")
             if obj_dir and os.path.isdir(obj_dir):
-                try:
+                with contextlib.suppress(OSError):
                     subdirs = [
                         d for d in os.listdir(obj_dir) if os.path.isdir(os.path.join(obj_dir, d))
                     ]
                     if subdirs:
-                        chosen_subdir_name = random.choice(subdirs)
-                        obj_filename = f"{chosen_subdir_name}.obj"
-                        mesh_path_to_load = os.path.join(obj_dir, chosen_subdir_name, obj_filename)
-                except OSError:
-                    self.logger.log(f"Warning: Could not read obj_dir '{obj_dir}'")
+                        chosen = random.choice(subdirs)
+                        mesh_path_to_load = os.path.join(obj_dir, chosen, f"{chosen}.obj")
 
         if not mesh_path_to_load or not os.path.isfile(mesh_path_to_load):
             fallback_dir = self.cloth_cfg.get("obj_dir_fallback")
             if fallback_dir and os.path.isdir(fallback_dir):
-                # Assumes the obj file is named after the folder, e.g., 'cloth_z_up/cloth_z_up.obj'
                 dir_name = os.path.basename(fallback_dir)
                 mesh_path_to_load = os.path.join(fallback_dir, f"{dir_name}.obj")
-            else:  # Final fallback
+            else:
                 mesh_path_to_load = self.cloth_cfg["mesh_path"]
 
         self.mesh_path = mesh_path_to_load
-        # self.logger.log(f"LOG:cloth_mesh_path: {self.mesh_path}")
 
         def _load(scale_val):
-            # Hard render guard: ensure GUI can't draw while spawning the soft body
             with contextlib.suppress(Exception):
                 p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
-            body_id = p.loadSoftBody(
+            return p.loadSoftBody(
                 self.mesh_path,
                 basePosition=base_position,
                 scale=scale_val,
@@ -85,85 +78,95 @@ class DeformableCloth:
                 useFaceContact=self.cloth_cfg["useFaceContact"],
                 collisionMargin=collision_margin,
             )
-            # Do NOT re-enable here; the env will enable at the very end of reset.
-            return body_id
 
-        # If no target size is requested, load once with the given scale.
         if self.randomization_kwargs["dynamics_randomization"]:
             scale = float(np.random.uniform(*self.cloth_cfg["scale_range"]))
         else:
             scale = float(self.cloth_cfg["scale"])
 
-        # Clamp to keep Bullet stable
-        scale_clip_range = self.cloth_cfg["scale_clip_range"]
-        scale = float(np.clip(scale, scale_clip_range[0], scale_clip_range[1]))
+        cl = self.cloth_cfg["scale_clip_range"]
+        scale = float(np.clip(scale, cl[0], cl[1]))
 
         if target_edge_length is None:
             self.cloth_id = _load(scale)
             used_scale = float(scale)
         else:
-            # Stage 1: load at a provisional scale to measure XY span
             _temp_id = _load(scale)
             try:
-                aabb_min, aabb_max = p.getAABB(_temp_id)
-                span_x = aabb_max[0] - aabb_min[0]
-                span_y = aabb_max[1] - aabb_min[1]
-                current_edge = max(span_x, span_y)
-                current_edge = current_edge if current_edge > 1e-6 else 1e-6
+                mn, mx = p.getAABB(_temp_id)
+                current_edge = max(mx[0] - mn[0], mx[1] - mn[1]) or 1e-6
                 desired_scale = (float(target_edge_length) / current_edge) * scale
             finally:
-                with contextlib.suppress(Exception):
-                    p.removeBody(_temp_id)
-            # Stage 2: reload with the exact scale
+                p.removeBody(_temp_id)
             self.cloth_id = _load(desired_scale)
             used_scale = float(desired_scale)
 
-        # Visible spawn (rendering is still OFF due to the guard; env re-enables later)
-        spawn_rgba = self.cloth_cfg["spawn_color_rgba"]
         p.changeVisualShape(
-            self.cloth_id, -1, flags=p.VISUAL_SHAPE_DOUBLE_SIDED, rgbaColor=spawn_rgba
+            self.cloth_id,
+            -1,
+            flags=p.VISUAL_SHAPE_DOUBLE_SIDED,
+            rgbaColor=self.cloth_cfg["spawn_color_rgba"],
         )
         self._texture_id = None
-
-        # keep original mesh path for MTL parsing / logging
-        self.mesh_dir = os.path.dirname(self.mesh_path) if isinstance(self.mesh_path, str) else None
-
-        # cache episode parameters for DR/obs parity with MuJoCo
         self.scale = used_scale
         self.mass = float(self.cloth_cfg["mass"])
         self.springElasticStiffness = float(spring_k)
         self.springDampingStiffness = float(spring_c)
         self.frictionCoeff = float(friction)
-        # Not exposed by PyBullet for soft bodies; keep for reporting parity only
         self.thickness = float(self.cloth_cfg["thickness"])
 
-        self._prev_verts_W = self.get_raw_vertex_positions()
+        # Initialize History
+        self.update()
+        self._prev_verts_W = self._cached_verts_W.copy()
+
         self.find_corners()
         self.compute_sites()
 
-    def get_raw_vertex_positions(self):
-        """Returns the raw vertex positions as a numpy array."""
+    def update(self):
+        """
+        Fetches the mesh from PyBullet ONCE per step.
+        Optimized to avoid re-fetching if called multiple times in the same step.
+        """
         mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
-        return np.array(mesh[1], dtype=np.float32)
+        self._cached_verts_W = np.array(mesh[1], dtype=np.float32)
 
-    def get_positions_W(self):
-        """Returns a dictionary mapping vertex names to their world positions."""
-        verts = self.get_raw_vertex_positions()
-        return {f"v_{i}": v for i, v in enumerate(verts)}
+    def get_raw_vertex_positions(self):
+        """Returns the cached vertex positions."""
+        if self._cached_verts_W is None:
+            self.update()
+        return self._cached_verts_W
+
+    def get_position(self, vertex_idx):
+        """Fast O(1) retrieval of a single vertex position."""
+        return self._cached_verts_W[vertex_idx]
 
     def get_velocities_W(self, dt):
-        """Estimates and returns per-vertex velocities in world coordinates."""
+        """Estimates and returns per-vertex velocities."""
         verts_W = self.get_raw_vertex_positions()
         vels = (verts_W - self._prev_verts_W) / max(dt, 1e-6)
-        self._prev_verts_W = verts_W
-        return {f"v_{i}": v for i, v in enumerate(vels)}
+        return vels
 
-    def get_center_W(self):
-        """Calculates the mean center of all cloth vertices."""
-        return np.mean(self.get_raw_vertex_positions(), axis=0)
+    def get_site_observations(self, dt, relative_origin):
+        """
+        Fast path for observation. Uses cached mesh.
+        """
+        verts_W = self.get_raw_vertex_positions()
+
+        # Calculate velocity based on frame-to-frame difference
+        diff = verts_W - self._prev_verts_W
+        self._prev_verts_W = verts_W.copy()
+        vels_W = diff / max(dt, 1e-6)
+
+        pos_map = {}
+        vel_map = {}
+        # _site_indices is {site_name: int_index}
+        for site, idx in self._site_indices.items():
+            pos_map[site] = verts_W[idx] - relative_origin
+            vel_map[site] = vels_W[idx]
+
+        return pos_map, vel_map
 
     def find_corners(self):
-        """Identifies the four corner vertices of the cloth and creates name mappings."""
         verts = self.get_raw_vertex_positions()
         min_x, max_x = verts[:, 0].min(), verts[:, 0].max()
         min_y, max_y = verts[:, 1].min(), verts[:, 1].max()
@@ -185,7 +188,6 @@ class DeformableCloth:
             for name, t in targets.items()
         }
 
-        # Mapping for compatibility with existing code that uses "0", "1", etc.
         self.corner_v_names = {
             "0": f"v_{self.corner_vertex_ids['top_right']}",
             "1": f"v_{self.corner_vertex_ids['bottom_right']}",
@@ -195,29 +197,29 @@ class DeformableCloth:
         }
 
     def compute_sites(self, n=9):
-        """Creates a grid of logical sites (e.g., 'S0_0') mapped to the nearest vertex names
-        (e.g., 'v_123')."""
         verts = self.get_raw_vertex_positions()
         mins, maxs = verts.min(axis=0), verts.max(axis=0)
         xs = np.linspace(mins[0], maxs[0], n)
         ys = np.linspace(mins[1], maxs[1], n)
 
         sites = {}
+        site_indices = {}
         xy = verts[:, :2]
         for r, y in enumerate(ys):
             for c, x in enumerate(xs):
                 d2 = (xy[:, 0] - x) ** 2 + (xy[:, 1] - y) ** 2
-                sites[f"S{r}_{c}"] = f"v_{int(np.argmin(d2))}"
+                best_idx = int(np.argmin(d2))
+                sites[f"S{r}_{c}"] = f"v_{best_idx}"
+                site_indices[f"S{r}_{c}"] = best_idx
         self.sites = sites
+        self._site_indices = site_indices
 
     def create_anchor(self, vertex_name, robot_id, link_id):
-        """Creates a soft body anchor between a cloth vertex and a robot link."""
         vertex_index = int(vertex_name.split("_")[1])
         p.createSoftBodyAnchor(self.cloth_id, vertex_index, robot_id, link_id, [0, 0, 0])
 
     def set_color(self, rgba):
         self.color = list(map(float, rgba))
-        # Preserve the current texture if one is applied
         if getattr(self, "_texture_applied", False) and self._texture_id is not None:
             p.changeVisualShape(
                 self.cloth_id, -1, textureUniqueId=int(self._texture_id), rgbaColor=self.color

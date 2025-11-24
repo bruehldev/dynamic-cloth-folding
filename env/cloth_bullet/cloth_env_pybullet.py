@@ -37,10 +37,31 @@ class BulletClothEnv_:
     def __init__(
         self,
         randomization_kwargs,
-        save_folder=None,
+        # --- Env kwargs ---
+        control_frequency,
+        ctrl_filter,
+        damping_ratio,
+        frame_stack_size,
+        image_obs_noise_mean,
+        image_obs_noise_std,
+        kp,
+        max_close_steps,
+        model_kwargs_path,
+        output_max,
+        robot_observation,
+        timestep,
+        # -> Task settings
+        fail_reward,
+        extra_reward,
+        goal_noise,
+        goal_noise_range,
+        sparse_dense,
+        success_distance,
+        success_reward,
+        # --- Other ---
+        save_folder,
         has_viewer=False,
         logger: Optional[Any] = None,
-        **kwargs,
     ):
         self.logger = logger if logger is not None else _NoOpLogger()
 
@@ -52,45 +73,60 @@ class BulletClothEnv_:
         self.seed()
 
         # --- Init Params from kwargs ---
-        self.kwargs = randomization_kwargs
-        self.kwargs.update(kwargs)  # Merge env_kwargs
+        self.randomization_kwargs = randomization_kwargs
 
-        task_cfg = self.kwargs["folding_task"]
-        self.task_name = self.kwargs["task_name"]
+        # --- Env settings ---
+        self.task_name = self.randomization_kwargs["task_name"]
+        self.control_frequency = control_frequency
+        self.ctrl_filter = ctrl_filter
         self.save_folder = save_folder
-        self.timestep = float(self.kwargs["timestep"])
-        self.control_frequency = float(self.kwargs["control_frequency"])
+        self.timestep = timestep
         self.substeps = max(1, int(1.0 / (self.timestep * self.control_frequency)))
-        self.filter = float(self.kwargs["ctrl_filter"])
         steps_per_second = 1.0 / self.timestep
         self.between_steps = max(1, int(1000.0 / steps_per_second))
-        self.output_max = float(self.kwargs["output_max"])
-        self.robot_observation = str(self.kwargs["robot_observation"])
-        self.max_close_steps = int(self.kwargs["max_close_steps"])
-        self.success_distance = float(task_cfg["success_distance"])
-        self.frame_stack_size = int(self.kwargs["frame_stack_size"])
-        self.sparse_dense = task_cfg["sparse_dense"]
-        self.success_reward = task_cfg["success_reward"]
-        self.fail_reward = task_cfg["fail_reward"]
-        self.extra_reward = task_cfg["extra_reward"]
-        self.image_size = (self.kwargs["image_size"], self.kwargs["image_size"])
+        self.output_max = output_max
+        self.robot_observation = robot_observation
+        self.max_close_steps = max_close_steps
+        self.frame_stack_size = frame_stack_size
+
+        # --- Task settings ---
+        self.fail_reward = fail_reward
+        self.extra_reward = extra_reward
+        self.goal_noise = goal_noise
+        self.goal_noise_range = goal_noise_range
+        self.success_distance = success_distance
+        self.sparse_dense = sparse_dense
+        self.success_reward = success_reward
+
+        self.image_size = (
+            self.randomization_kwargs["image_size"],
+            self.randomization_kwargs["image_size"],
+        )
+
+        # --- Optional simple EE-reaching task ---
+        # Allows bypassing the cloth FoldingTask with a static EE target in I-coordinates.
+        self.simple_ee_task = False
+        self.simple_ee_goal_I = np.array(
+            self.randomization_kwargs.get("simple_ee_goal_I", [-0.1, -0.1, 0.1]), dtype=np.float32
+        )
 
         self.has_viewer = has_viewer
-        self.image_obs_noise_mean = self.kwargs["image_obs_noise_mean"]
-        self.image_obs_noise_std = self.kwargs["image_obs_noise_std"]
+        self.image_obs_noise_mean = image_obs_noise_mean
+        self.image_obs_noise_std = image_obs_noise_std
 
         # Define action space before reset is called
         self.action_space = gym.spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
-        self.world = PyBulletWorld(self.has_viewer, self.timestep, self.kwargs)
-        self.camera = Camera(self.image_size, self.kwargs)
+        self.world = PyBulletWorld(self.has_viewer, self.timestep, self.randomization_kwargs)
+        self.camera = Camera(self.image_size, self.randomization_kwargs)
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
         self._ws_vis_id = None  # Debug: id of the translucent workspace box
         self._ws_line_ids = []  # Debug: store wireframe line ids so we can clear them
         self._task_line_ids = []  # Debug: debug lines (origin→target / origin→goal)
         self._task_marker_ids = []  # Debug: tiny spheres & labels for sites/goals
+        self._simple_goal_debug_ids = []  # Debug: markers for the simple EE goal
 
-        robot_cfg = self.kwargs["robot"]
+        robot_cfg = self.randomization_kwargs["robot"]
         self.limits_min = robot_cfg["workspace_limits_min"]
         self.limits_max = robot_cfg["workspace_limits_max"]
 
@@ -120,8 +156,26 @@ class BulletClothEnv_:
     def task_reward_function(self):
         """
         Provides the task_reward_function for compatibility with the training script,
-        forwarding it from the internal FoldingTask instance.
+        forwarding it from the internal FoldingTask instance. When a simple
+        EE-reaching task is active, return a small closure implementing that reward.
         """
+        if getattr(self, "simple_ee_task", False):
+
+            def _reward_fn(achieved, desired, info):
+                diff = achieved - desired
+                dist = np.linalg.norm(diff, axis=-1)
+                reward = -dist
+                success = dist < self.success_distance
+                reward = np.where(success, self.success_reward, reward)
+                if info is not None:
+                    try:
+                        info.setdefault("is_success_batch", success)
+                    except Exception:
+                        pass
+                return reward
+
+            return _reward_fn
+
         return self.task.reward_function
 
     def seed(self, seed=None):
@@ -130,6 +184,7 @@ class BulletClothEnv_:
 
     def reset(self):
         self.current_step = 0
+        # self._remove_simple_goal_visual()
         # Hide intermediate loads & speed up reset (single guard)
         try:
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
@@ -140,18 +195,20 @@ class BulletClothEnv_:
             pass
         self.episode_ee_close_steps = 0
         self.world.reset()
-        if self.kwargs["dynamics_randomization"]:  # Check if dynamics randomization is good name
-            self.world.apply_domain_randomization(self.kwargs)
+        if self.randomization_kwargs[
+            "dynamics_randomization"
+        ]:  # Check if dynamics randomization is good name
+            self.world.apply_domain_randomization(self.randomization_kwargs)
 
         # Create robot and cloth
-        robot_cfg = self.kwargs["robot"]
+        robot_cfg = self.randomization_kwargs["robot"]
         base_pos = robot_cfg["base_pos"]
         base_orn = p.getQuaternionFromEuler(robot_cfg["base_orn_euler"])
         self.robot = PandaRobot(
             base_position=base_pos, base_orientation=base_orn, robot_cfg=robot_cfg
         )
         # Robot dynamics DR (only if master switch is ON)
-        if self.kwargs["dynamics_randomization"]:
+        if self.randomization_kwargs["dynamics_randomization"]:
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
             _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
             _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))
@@ -163,7 +220,7 @@ class BulletClothEnv_:
             _frc = float(robot_cfg["lateral_friction"])
             self.robot.randomize_dynamics(_lin, _ang, _frc)
 
-        cloth_cfg = self.kwargs["cloth"]
+        cloth_cfg = self.randomization_kwargs["cloth"]
         initial_cloth_pos_xy = cloth_cfg["initial_pos"]
         cloth_pos = [
             initial_cloth_pos_xy[0],
@@ -174,7 +231,7 @@ class BulletClothEnv_:
         # ---- Cloth domain randomization (physics + size + optional color) ----
 
         # --- Cloth size ---
-        if self.kwargs["dynamics_randomization"]:
+        if self.randomization_kwargs["dynamics_randomization"]:
             scale_guess = float(self.np_random.uniform(*cloth_cfg["scale_range"]))
         else:
             scale_guess = float(cloth_cfg["scale"])
@@ -193,33 +250,46 @@ class BulletClothEnv_:
         self.cloth = DeformableCloth(
             base_position=cloth_pos,
             cloth_cfg=cloth_cfg,
-            randomization_kwargs=self.kwargs,
+            randomization_kwargs=self.randomization_kwargs,
             logger=self.logger,
         )
 
-        # Pass logger down so cloth can report texture DR
-
-        # Wait for cloth to settle
         for _ in range(cloth_cfg["settle_steps"]):
             self.world.step()
 
+        # Update cloth vertices after settling so IK and obs are correct
+        self.cloth.update()
+        # Reset previous vertices to current to avoid massive velocity spike on first step
+        self.cloth._prev_verts_W = self.cloth.get_raw_vertex_positions().copy()
+
         # Set camera target to the cloth's center, matching MuJoCo's lookatbody
         center_v_name = self.cloth.corner_v_names["mid"]
-        self._camera_target = self.cloth.get_positions_W()[center_v_name]
+        center_idx = int(center_v_name.split("_")[1])
+        self._camera_target = self.cloth.get_position(center_idx)
         self.camera.begin_episode(self._camera_target)
-        # self.camera.print_gui_camera_as_type()
 
-        # Initialize the task
-        self.task = FoldingTask(
-            self.task_name,
-            self.cloth,
-            self.kwargs,
-            self.np_random,
-        )
+        # Initialize the task (optional simple EE goal bypasses FoldingTask)
+        if self.simple_ee_task:
+            self.task = None
+        else:
+            self.task = FoldingTask(
+                self.task_name,
+                self.cloth,
+                self.randomization_kwargs,
+                self.np_random,
+                self.fail_reward,
+                self.extra_reward,
+                self.goal_noise,
+                self.goal_noise_range,
+                self.success_distance,
+                self.sparse_dense,
+                self.success_reward,
+            )
 
         # Move robot to grasp corner
         corner_v_name = self.cloth.corner_v_names["0"]
-        corner_world_pos = self.cloth.get_positions_W()[corner_v_name]
+        corner_idx = int(corner_v_name.split("_")[1])
+        corner_world_pos = self.cloth.get_position(corner_idx)
 
         # First pass IK
         joint_positions = self.robot.calculate_ik(corner_world_pos)
@@ -257,7 +327,13 @@ class BulletClothEnv_:
         self._prev_ee_pos_W = self.robot.get_ee_position_W()
 
         # Set goal for the episode
-        self.goal, self.goal_noise = self.task.sample_goal(self.get_cloth_position_I())
+        if self.simple_ee_task:
+            self.goal = self.simple_ee_goal_I.astype(np.float32)
+            self.goal_noise = 0.0
+        else:
+            self.goal, self.goal_noise = self.task.sample_goal(self.get_cloth_position_I())
+
+        # self._update_simple_goal_visual()
 
         # Capture initial image (viewer can stay off; camera grabs directly)
         img = self.get_image_obs()
@@ -266,7 +342,7 @@ class BulletClothEnv_:
             self.frame_stack.append(img)
 
         # Randomize cloth color (skip if DeformableCloth already tinted)
-        if self.kwargs["materials_randomization"] and not getattr(
+        if self.randomization_kwargs["materials_randomization"] and not getattr(
             self.cloth, "_tint_applied", False
         ):
             lo = np.array(cloth_cfg["color_lo"])
@@ -290,7 +366,7 @@ class BulletClothEnv_:
         # Now show the fully initialized scene (single switch at the very end)
         try:
             if self.has_viewer:
-                vcam = self.kwargs["viewer_debug_camera"]
+                vcam = self.randomization_kwargs["viewer_debug_camera"]
                 p.resetDebugVisualizerCamera(
                     cameraDistance=float(vcam["distance"]),
                     cameraYaw=float(vcam["yaw"]),
@@ -305,11 +381,11 @@ class BulletClothEnv_:
                 p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
                 p.configureDebugVisualizer(
                     p.COV_ENABLE_DEPTH_BUFFER_PREVIEW,
-                    int(self.kwargs["show_depth_preview"]),
+                    int(self.randomization_kwargs["show_depth_preview"]),
                 )
                 p.configureDebugVisualizer(
                     p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW,
-                    int(self.kwargs["show_seg_preview"]),
+                    int(self.randomization_kwargs["show_seg_preview"]),
                 )
         except Exception:
             pass
@@ -317,10 +393,15 @@ class BulletClothEnv_:
 
     def step(self, action):
         raw_action = action.copy()
-        self.previous_raw_action = raw_action.copy()
+        # 1. Save raw action for observation
+
+        # Capture previous EE position for movement calculation (t-1)
+        ee_pos_prev = self._prev_ee_pos_W.copy()
+
+        # 2. Scale action
         action = raw_action * self.output_max
 
-        # Determine which substep to capture the image on, matching original random logic
+        # 3. Determine random image capture substep
         image_obs_substep_idx = int(
             np.clip(
                 np.random.normal(
@@ -331,24 +412,44 @@ class BulletClothEnv_:
             )
         )
 
-        previous_desired_pos_step_W = self.desired_pos_step_W.copy()
-        desired_pos_step_W = previous_desired_pos_step_W + action
+        # 4. Update the "Step" Target (The command step input)
+        # This persists across steps!
         self.desired_pos_step_W = np.clip(
-            desired_pos_step_W, self.min_absolute_W, self.max_absolute_W
+            self.desired_pos_step_W + action, self.min_absolute_W, self.max_absolute_W
         )
 
+        # TODO Safety: prevent digging into table (maybe remove)
+        table_z = self.world.get_table_top_z()
+        if self.desired_pos_step_W[2] < table_z:
+            self.desired_pos_step_W[2] = table_z
+
+        # Initialize joint_positions outside loop
+        joint_positions = None
+
+        # 5. Substep Loop (Physics & Filter Integration)
         for i in range(self.substeps):
+            # Simulate the analog low-pass filter (capacitor)
+            # We iterate `between_steps` times to smooth the signal
             for _ in range(self.between_steps):
                 self.desired_pos_ctrl_W = (
-                    self.filter * self.desired_pos_step_W
-                    + (1 - self.filter) * self.desired_pos_ctrl_W
+                    self.ctrl_filter * self.desired_pos_step_W
+                    + (1 - self.ctrl_filter) * self.desired_pos_ctrl_W
                 )
 
-            joint_positions = self.robot.calculate_ik(self.desired_pos_ctrl_W)
-            self.robot.apply_joint_positions(joint_positions)
+            # TODO OPTIMIZATION: Throttled IK (Every 4 substeps = ~120Hz)
+            # This drastically reduces CPU load. (maybe remove)
+            if i % 4 == 0:
+                joint_positions = self.robot.calculate_ik(self.desired_pos_ctrl_W)
+
+            # 7. Apply control and step physics
+            if joint_positions is not None:
+                self.robot.apply_joint_positions(joint_positions)
             self.robot.force_fingers_closed()
             self.world.step()
 
+            self.cloth.update()
+
+            # 8. Capture image if it's the right substep
             if i == image_obs_substep_idx:
                 self.frame_stack.append(self.get_image_obs())
 
@@ -356,6 +457,7 @@ class BulletClothEnv_:
         reward, done, info = self._get_reward_and_done(obs, raw_action)
 
         self.current_step += 1
+        self.previous_raw_action = raw_action.copy()
 
         # try:
         #    if self.has_viewer:
@@ -363,6 +465,7 @@ class BulletClothEnv_:
         # except Exception:
         #    pass
 
+        # Sanity Check for NaNs
         for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):
             if np.any(np.isnan(obs[k])):
                 raise ValueError(f"NaN in obs['{k}'] detected!")
@@ -370,58 +473,115 @@ class BulletClothEnv_:
         return obs, reward, done, info
 
     def _get_reward_and_done(self, obs, raw_action):
-        reward = self.task.compute_reward(obs["achieved_goal"], self.goal, {})
+        if self.simple_ee_task:
+            # 1. Get positions
+            ee_pos_I = self.get_ee_position_I()
 
-        cloth_pos_I = self.get_cloth_position_I()
-        verts_W = self.cloth.get_positions_W()
-        # This is now calculated below using camera projection
-        # corner_positions = self._get_corner_image_positions().astype(np.float32)
-        # corner_positions = self._get_corner_image_positions()
-        # ground-truth corner labels in image space (normalized [0,1])
-        corner_positions = self._get_corner_image_positions().astype(np.float32)
+            # 2. Distance
+            dist_to_target = float(np.linalg.norm(ee_pos_I - self.goal))
 
-        # Calculate all corner distances for the info dict
-        # Map vertex name to site name, and site name to its index in the goal vector.
-        vertex_to_site_name = {v: s for s, v in self.cloth.sites.items()}
-        site_name_to_goal_idx = {c["origin"]: i for i, c in enumerate(self.task.constraints)}
+            # 3. Success
+            is_success = dist_to_target < self.success_distance
+
+            # --- New Pybullet Action Penalty ---
+            # Penalize large actions to encourage smoothness/stopping.
+            # 0.1 is a common weight. If raw_action is [1,1,1], penalty is 0.3.
+            # If raw_action is [0,0,0], penalty is 0.
+            action_penalty = np.sum(np.square(raw_action)) * 0.1
+            # --- FIX END ---
+
+            # 4. Dense Reward
+            if is_success:
+                # We still apply penalty during success so it learns to hold still!
+                reward = (self.success_reward + 1.0) - action_penalty
+                self.episode_ee_close_steps += 1
+            else:
+                reward = -dist_to_target - action_penalty
+                self.episode_ee_close_steps = 0
+
+            # 5. Done logic
+            done = self.episode_ee_close_steps >= self.max_close_steps
+
+            info = {
+                "reward": float(reward),
+                "is_success": bool(is_success),
+                "dist_to_target": dist_to_target,
+                "action_penalty": float(action_penalty),  # Good for debugging logs
+                "delta_size": float(np.linalg.norm(raw_action)),
+                "ctrl_error": float(
+                    np.linalg.norm(self.desired_pos_ctrl_W - self.robot.get_ee_position_W())
+                ),
+                "corner_sum_error": dist_to_target,
+                "corner_positions": np.zeros(8, dtype=np.float32),
+                "corner_0": dist_to_target,
+                "corner_1": 0.0,
+                "corner_2": 0.0,
+                "corner_3": 0.0,
+                "corner_distance": dist_to_target,
+                "env_memory_usage": self.process.memory_info().rss if self.process else 0,
+                "ee_target_W": self.desired_pos_ctrl_W.copy(),
+                "ee_target_step_W": self.desired_pos_step_W.copy(),
+                "ee_W": self.robot.get_ee_position_W().copy(),
+            }
+            return reward, done, info
+
+        # 1. Action Penalty
+        action_penalty = np.sum(np.square(raw_action)) * 0.1
+
+        # 2. Task Reward
+        task_reward = self.task.compute_reward(obs["achieved_goal"], self.goal, {})
+        reward = task_reward - action_penalty
+
+        # --- OPTIMIZATION: Use direct integer access (FAST) ---
+        # REMOVED: verts_W = self.cloth.get_positions_W()
 
         distances = {}
         all_targets_I = [self.goal[i * 3 : (i + 1) * 3] for i in range(len(self.task.constraints))]
 
+        site_name_to_goal_idx = {c["origin"]: i for i, c in enumerate(self.task.constraints)}
+
         for corner_key in ("0", "1", "2", "3"):
-            v_name = self.cloth.corner_v_names[corner_key]
-            achieved_pos_I = verts_W[v_name] - self.relative_origin
-            site_name = vertex_to_site_name.get(v_name)
+            # Get the Vertex ID directly from string "v_123" -> 123
+            v_str = self.cloth.corner_v_names[corner_key]
+            v_id = int(v_str.split("_")[1])
+
+            # FAST ACCESS: O(1)
+            achieved_pos_I = self.cloth.get_position(v_id) - self.relative_origin
+
+            # Find site name for this vertex index
+            site_name = None
+            for s_name, s_idx in self.cloth._site_indices.items():
+                if s_idx == v_id:
+                    site_name = s_name
+                    break
 
             if site_name and site_name in site_name_to_goal_idx:
-                # This corner is a constrained "origin" site; calculate distance to its specific target.
                 goal_idx = site_name_to_goal_idx[site_name]
                 target_pos_I = self.goal[goal_idx * 3 : (goal_idx + 1) * 3]
                 distances[corner_key] = float(np.linalg.norm(achieved_pos_I - target_pos_I))
             elif all_targets_I:
-                # This corner is not a constrained origin. As a fallback, find its distance
-                # to the closest of any of the available targets.
                 distances[corner_key] = float(
                     min(np.linalg.norm(achieved_pos_I - t) for t in all_targets_I)
                 )
             else:
-                # No constraints/targets defined, distance is 0.
                 distances[corner_key] = 0.0
 
-        # Use the correct distance for the done condition and success signal
         dist_to_target = distances["1"]
-        # is_success = dist_to_target < self.success_distance
-        is_success = reward > self.fail_reward
+        is_success = task_reward > self.fail_reward
+
+        # Get corner positions for visualization (fast access)
+        corner_pixels = self._get_corner_image_positions().astype(np.float32)
 
         info = {
             "reward": float(reward),
             "is_success": bool(is_success),
             "delta_size": float(np.linalg.norm(raw_action)),
+            "action_penalty": float(action_penalty),
             "ctrl_error": float(
                 np.linalg.norm(self.desired_pos_ctrl_W - self.robot.get_ee_position_W())
             ),
             "corner_sum_error": 0.0,
-            "corner_positions": corner_positions.reshape(-1).astype(np.float32),
+            "corner_positions": corner_pixels.reshape(-1).astype(np.float32),
             "env_memory_usage": self.process.memory_info().rss if self.process else 0,
             "ee_target_W": self.desired_pos_ctrl_W.copy(),
             "ee_target_step_W": self.desired_pos_step_W.copy(),
@@ -431,8 +591,9 @@ class BulletClothEnv_:
         for k in distances:
             info[f"corner_{k}"] = distances[k]
             info["corner_sum_error"] += distances[k]
+
+        info["corner_distance"] = dist_to_target
         info["dsum"] = info["corner_sum_error"]
-        # print(f"Debug: corner_sum_error: {info['corner_sum_error']}")
 
         if dist_to_target < self.success_distance:
             self.episode_ee_close_steps += 1
@@ -440,11 +601,8 @@ class BulletClothEnv_:
             self.episode_ee_close_steps = 0
 
         done = self.episode_ee_close_steps >= self.max_close_steps
-        # Overwrite is_success to match the original logic where it was tied to reward, not 'done'
         info["is_success"] = bool(is_success)
-        # printing info["corner_1"] in the first rollout for each backend.
-        # if self.current_step == 1:
-        # print(f"Debug: corner_1 distance: {info['corner_1']}")
+
         return reward, done, info
 
     def _project_points_uv(self, points_W, label="points", cam_type="default"):
@@ -503,13 +661,13 @@ class BulletClothEnv_:
 
     # ---------- CORNER UVs ----------
     def _get_corner_image_positions(self, cam_type="default"):
-        """
-        Return [u0,v0, u1,v1, u2,v2, u3,v3] in [0,1] for the cloth's corners
-        using the stable camera (no crop).
-        """
-        pos_dict = self.cloth.get_positions_W()
         names = ["0", "1", "2", "3"]
-        named_pts = [pos_dict[self.cloth.corner_v_names[n]] for n in names]
+        named_pts = []
+        for n in names:
+            v_str = self.cloth.corner_v_names[n]  # e.g. "v_123"
+            v_id = int(v_str.split("_")[1])
+            named_pts.append(self.cloth.get_position(v_id))
+
         named_log = self._project_points_uv(named_pts, label="named_corners", cam_type=cam_type)
         return np.array(named_log["uv_full"], dtype=np.float32)
 
@@ -517,65 +675,73 @@ class BulletClothEnv_:
         return self.camera.policy_image(self._camera_target)
 
     def get_obs(self):
-        cloth_pos_I = self.get_cloth_position_I()
-        vel_all_W = self.cloth.get_velocities_W(self.timestep)
-        # site-filtered velocities in the SAME order as positions
-        vel_sites_W = {site: vel_all_W[vname] for site, vname in self.cloth.sites.items()}
+        ee_pos_W = self.robot.get_ee_position_W()
+        ee_vel_W = self.get_ee_velocity()
 
-        achieved_goal = self.task.get_achieved_goal(cloth_pos_I)
+        # Calculate standard EE info
+        self._prev_ee_pos_W = ee_pos_W
+        ee_pos_I = ee_pos_W - self.relative_origin
+        desired_pos_ctrl_I = self.desired_pos_ctrl_W - self.relative_origin
 
-        cloth_obs = np.concatenate(
-            [
-                np.array(list(cloth_pos_I.values())).flatten(),
-                np.array(list(vel_sites_W.values())).flatten(),
-            ]
-        )
+        if self.simple_ee_task:
+            # 1. Calculate dimensions exactly like the full task to match network size
+            n_sites = len(self.cloth.sites)
+            cloth_dim = n_sites * 3 * 2  # pos + vel
+            physics_dim = 9 if self.randomization_kwargs["dynamics_randomization"] else 0
 
-        # --- Physics DR scalars (MuJoCo parity) ---
-        physics_params = []
-        if self.kwargs["dynamics_randomization"]:
-            # strict: these must be set during reset()/DR
-            g = float(self.world.gravity)
-            tab_mu = float(self.world.table_lateral_friction)
-            tab_e = float(self.world.table_restitution)
-            jd = float(np.mean(self.robot.joint_damping))
-            jf = float(np.mean(self.robot.joint_friction))
+            # 2. Create the zero vector
+            cloth_obs = np.zeros(cloth_dim + physics_dim, dtype=np.float32)
 
-            physics_params.extend(
+            # 3. Inject EE state
+            cloth_obs[0:3] = ee_pos_I  # Position
+            cloth_obs[3:6] = ee_vel_W  # Velocity
+
+            achieved_goal = ee_pos_I.astype(np.float32)
+        else:
+            # --- OPTIMIZATION: Use fast path ---
+            cloth_pos_I, vel_sites_W = self.cloth.get_site_observations(
+                self.timestep, self.relative_origin
+            )
+
+            achieved_goal = self.task.get_achieved_goal(cloth_pos_I)
+
+            cloth_obs = np.concatenate(
                 [
+                    np.array(list(cloth_pos_I.values())).flatten(),
+                    np.array(list(vel_sites_W.values())).flatten(),
+                ]
+            )
+
+            # --- Physics DR scalars (MuJoCo parity) ---
+            if self.randomization_kwargs["dynamics_randomization"]:
+                g = float(self.world.gravity)
+                tab_mu = float(self.world.table_lateral_friction)
+                tab_e = float(self.world.table_restitution)
+                jd = float(np.mean(self.robot.joint_damping))
+                jf = float(np.mean(self.robot.joint_friction))
+
+                physics_params = [
                     g,
                     tab_mu,
                     tab_e,
                     float(self.cloth.frictionCoeff),
-                    # If these attrs don't exist on your cloth wrapper, drop them or add getters:
                     float(getattr(self.cloth, "thickness", 0.002)),
                     float(getattr(self.cloth, "springElasticStiffness", 40.0)),
                     float(getattr(self.cloth, "springDampingStiffness", 0.1)),
                     jd,
                     jf,
                 ]
-            )
-            cloth_obs = np.concatenate([cloth_obs, np.array(physics_params, dtype=np.float32)])
-
-        ee_pos_W = self.robot.get_ee_position_W()
-        ee_vel_W = self.get_ee_velocity()
-        self._prev_ee_pos_W = ee_pos_W
-        ee_pos_I = ee_pos_W - self.relative_origin
-
-        # include desired ctrl in both modes; MuJoCo's "ee" obs has it too
-        desired_pos_ctrl_I = self.desired_pos_ctrl_W - self.relative_origin
+                cloth_obs = np.concatenate([cloth_obs, np.array(physics_params, dtype=np.float32)])
 
         if self.robot_observation == "ee":
             robot_obs = np.concatenate([ee_pos_I, ee_vel_W, desired_pos_ctrl_I])
         elif self.robot_observation == "ctrl":
             robot_obs = np.concatenate([self.previous_raw_action, np.zeros(6)])
-        elif self.robot_observation == "none":  # NEW for parity
+        elif self.robot_observation == "none":
             robot_obs = np.zeros(9, dtype=np.float32)
 
         image_stack = np.array(list(self.frame_stack)).flatten()
-        # concatenated input vector used by the policy: [image | 27-d extras]
 
-        # Sanitize and clip all observation components
         def nan(a):
             return np.nan_to_num(a, nan=0.0, posinf=1e3, neginf=-1e3)
 
@@ -611,12 +777,11 @@ class BulletClothEnv_:
         return self.robot.get_joint_velocities()
 
     def get_cloth_position_I(self):
-        verts_W = self.cloth.get_positions_W()  # dict: v_* -> [x,y,z]
-        # map S{r}_{c} -> corresponding vertex name, keep insertion order from compute_sites()
-        return {
-            site: (verts_W[vname] - self.relative_origin)
-            for site, vname in self.cloth.sites.items()
-        }
+        # Optimized to use _site_indices directly
+        positions = {}
+        for site, idx in self.cloth._site_indices.items():
+            positions[site] = self.cloth.get_position(idx) - self.relative_origin
+        return positions
 
     def get_masked_image(
         self,
@@ -760,6 +925,39 @@ class BulletClothEnv_:
     def close(self):
         self.world.close()
 
+    def _remove_simple_goal_visual(self):
+        if not getattr(self, "_simple_goal_debug_ids", None):
+            return
+        for _id in self._simple_goal_debug_ids:
+            with np.errstate(all="ignore"):
+                p.removeUserDebugItem(_id)
+        self._simple_goal_debug_ids = []
+
+    def _update_simple_goal_visual(self):
+        self._remove_simple_goal_visual()
+        if not getattr(self, "simple_ee_task", False):
+            return
+        goal_I = np.asarray(self.goal, dtype=np.float32)
+        goal_W = (self.relative_origin + goal_I).astype(np.float32)
+        goal_tip = (goal_W + np.array([0.0, 0.0, 0.08], dtype=np.float32)).tolist()
+        color = [1.0, 0.3, 0.1]
+        self._simple_goal_debug_ids = []
+        self._simple_goal_debug_ids.append(
+            p.addUserDebugPoints([goal_W.tolist()], [color], pointSize=12, lifeTime=0)
+        )
+        self._simple_goal_debug_ids.append(
+            p.addUserDebugLine(goal_W.tolist(), goal_tip, color, lineWidth=3.0, lifeTime=0)
+        )
+        self._simple_goal_debug_ids.append(
+            p.addUserDebugText(
+                "EE goal",
+                goal_tip,
+                textColorRGB=color,
+                textSize=1.4,
+                lifeTime=0,
+            )
+        )
+
     def _spawn_workspace_visual_box(self, origin, limits_min, limits_max, rgba=[0, 1, 0, 0.15]):
         """Create a translucent box that matches the workspace. No collisions."""
         # Remove previous visual box if it exists
@@ -795,6 +993,8 @@ class BulletClothEnv_:
     # ---------------- Task visualization helpers (non-physics) ----------------
     def _draw_task_visuals(self):
         """Draws: (1) origin→target line per constraint, (2) origin→goal ray, (3) small spheres on sites."""
+        if self.task is None:
+            return
         # Clear previous
         for _id in getattr(self, "_task_line_ids", []):
             with np.errstate(all="ignore"):
@@ -803,10 +1003,6 @@ class BulletClothEnv_:
             with np.errstate(all="ignore"):
                 p.removeBody(bid)
         self._task_line_ids, self._task_marker_ids = [], []
-
-        # Fetch current site positions
-        verts_W = self.cloth.get_positions_W()  # mapping key -> 3D pos
-        sites = self.cloth.sites  # name -> key used in verts_W
 
         # Colors
         col_origin = [0.1, 0.6, 1.0]  # blue-ish
@@ -820,10 +1016,11 @@ class BulletClothEnv_:
         for ci, c in enumerate(self.task.constraints):
             ok = c["origin"]
             tk = c["target"]  # site names (e.g., "S0_8")
-            okey = sites[ok]  # verts_W key for origin
-            tkey = sites[tk]  # verts_W key for target
-            o = np.array(verts_W[okey], dtype=float)  # origin position (W)
-            t = np.array(verts_W[tkey], dtype=float)  # target position (W)
+
+            idx_o = self.cloth._site_indices[ok]
+            idx_t = self.cloth._site_indices[tk]
+            o = np.array(self.cloth.get_position(idx_o), dtype=float)
+            t = np.array(self.cloth.get_position(idx_t), dtype=float)
 
             # 1) Origin → Target line (white-ish to distinguish)
             self._task_line_ids.append(
