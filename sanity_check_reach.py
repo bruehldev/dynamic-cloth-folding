@@ -30,7 +30,7 @@ def run_sanity_check():
     variant["randomization_kwargs"]["render_size"] = [500, 500]
 
     # IMPORTANT: Set a goal that requires moving DOWN (negative Z) to test your fix
-    variant["randomization_kwargs"]["simple_ee_goal_I"] = [-0.1, -0.1, 0.2]
+    variant["randomization_kwargs"]["simple_ee_goal_I"] = [-0.1, -0.1, 0.1]
 
     print("Initialize Env...")
     env = ClothEnvBullet(

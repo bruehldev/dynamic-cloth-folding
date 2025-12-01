@@ -22,7 +22,9 @@ class DeformableCloth:
         self.logger = logger
 
         # --- State Cache ---
-        self._cached_verts_W = None
+        self._cached_verts_raw = None  # Stores tuple (Fast)
+        self._cached_verts_np = None  # Stores numpy array (Slow, lazy loaded)
+        self._prev_verts_raw = None  # History for velocity (Tuple)
 
         # Determine physics properties
         if self.randomization_kwargs["dynamics_randomization"]:
@@ -84,8 +86,8 @@ class DeformableCloth:
         else:
             scale = float(self.cloth_cfg["scale"])
 
-        cl = self.cloth_cfg["scale_clip_range"]
-        scale = float(np.clip(scale, cl[0], cl[1]))
+        # cl = self.cloth_cfg["scale_clip_range"]
+        # scale = float(np.clip(scale, cl[0], cl[1]))
 
         if target_edge_length is None:
             self.cloth_id = _load(scale)
@@ -117,7 +119,7 @@ class DeformableCloth:
 
         # Initialize History
         self.update()
-        self._prev_verts_W = self._cached_verts_W.copy()
+        self._prev_verts_raw = self._cached_verts_raw  # Init history
 
         self.find_corners()
         self.compute_sites()
@@ -125,49 +127,70 @@ class DeformableCloth:
     def update(self):
         """
         Fetches the mesh from PyBullet ONCE per step.
-        Optimized to avoid re-fetching if called multiple times in the same step.
+        Stores RAW tuple to avoid expensive Numpy conversion of the full mesh.
         """
         mesh = p.getMeshData(self.cloth_id, -1, flags=p.MESH_DATA_SIMULATION_MESH)
-        self._cached_verts_W = np.array(mesh[1], dtype=np.float32)
+        self._cached_verts_raw = mesh[1]  # Tuple of tuples
+        self._cached_verts_np = None  # Invalidate cache
 
     def get_raw_vertex_positions(self):
-        """Returns the cached vertex positions."""
-        if self._cached_verts_W is None:
-            self.update()
-        return self._cached_verts_W
+        """
+        Returns the full vertex array.
+        WARNING: Slow! Use only during initialization.
+        """
+        if self._cached_verts_np is None:
+            if self._cached_verts_raw is None:
+                self.update()
+            self._cached_verts_np = np.array(self._cached_verts_raw, dtype=np.float32)
+        return self._cached_verts_np
 
     def get_position(self, vertex_idx):
-        """Fast O(1) retrieval of a single vertex position."""
-        return self._cached_verts_W[vertex_idx]
+        """Fast O(1) retrieval of a single vertex position from tuple."""
+        return np.array(self._cached_verts_raw[vertex_idx], dtype=np.float32)
 
     def get_velocities_W(self, dt):
-        """Estimates and returns per-vertex velocities."""
+        """
+        Estimates velocities.
+        WARNING: Slow! Should not be called during training loop.
+        """
         verts_W = self.get_raw_vertex_positions()
-        vels = (verts_W - self._prev_verts_W) / max(dt, 1e-6)
+        # Need previous numpy array for this legacy method
+        # Reconstruct it from raw if needed, but ideally avoid calling this.
+        prev_np = np.array(self._prev_verts_raw, dtype=np.float32)
+        vels = (verts_W - prev_np) / max(dt, 1e-6)
         return vels
 
     def get_site_observations(self, dt, relative_origin):
         """
-        Fast path for observation. Uses cached mesh.
+        Fast path for observation.
+        Converts ONLY the site vertices to Numpy, avoiding full mesh conversion.
         """
-        verts_W = self.get_raw_vertex_positions()
+        curr = self._cached_verts_raw
+        prev = self._prev_verts_raw
 
-        # Calculate velocity based on frame-to-frame difference
-        diff = verts_W - self._prev_verts_W
-        self._prev_verts_W = verts_W.copy()
-        vels_W = diff / max(dt, 1e-6)
+        if prev is None:
+            prev = curr
+
+        dt = max(dt, 1e-6)
 
         pos_map = {}
         vel_map = {}
-        # _site_indices is {site_name: int_index}
-        for site, idx in self._site_indices.items():
-            pos_map[site] = verts_W[idx] - relative_origin
-            vel_map[site] = vels_W[idx]
 
+        # Iterate only over the ~81 sites we care about
+        for site, idx in self._site_indices.items():
+            # Convert 2 points to numpy (Fast)
+            c_arr = np.array(curr[idx], dtype=np.float32)
+            p_arr = np.array(prev[idx], dtype=np.float32)
+
+            pos_map[site] = c_arr - relative_origin
+            vel_map[site] = (c_arr - p_arr) / dt
+
+        # Update history reference (Fast, no copy)
+        self._prev_verts_raw = curr
         return pos_map, vel_map
 
     def find_corners(self):
-        verts = self.get_raw_vertex_positions()
+        verts = self.get_raw_vertex_positions()  # Slow, but only runs once at init
         min_x, max_x = verts[:, 0].min(), verts[:, 0].max()
         min_y, max_y = verts[:, 1].min(), verts[:, 1].max()
         center_xy = (verts[:, 0].mean(), verts[:, 1].mean())
@@ -197,7 +220,7 @@ class DeformableCloth:
         }
 
     def compute_sites(self, n=9):
-        verts = self.get_raw_vertex_positions()
+        verts = self.get_raw_vertex_positions()  # Slow, but only runs once at init
         mins, maxs = verts.min(axis=0), verts.max(axis=0)
         xs = np.linspace(mins[0], maxs[0], n)
         ys = np.linspace(mins[1], maxs[1], n)
