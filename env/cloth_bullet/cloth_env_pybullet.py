@@ -10,6 +10,7 @@ import psutil
 import pybullet as p
 from gym.utils import EzPickle, seeding
 
+from env.cloth_bullet import debug_util  # noqa: F401
 from env.cloth_bullet.camera import Camera
 from env.cloth_bullet.deformable_cloth import DeformableCloth
 from env.cloth_bullet.folding_task import FoldingTask
@@ -177,7 +178,7 @@ class BulletClothEnv_:
 
     def reset(self):
         self.current_step = 0
-        # self._remove_simple_goal_visual()
+        # debug_util.remove_simple_goal_visual(self)
         try:
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
@@ -344,16 +345,17 @@ class BulletClothEnv_:
 
         # ---- Visualize the active task in the GUI (origins, targets, goal rays) ----
         # try:
-        #    self._draw_task_visuals()
+        #    debug_util.draw_task_visuals(self)
         # except Exception:
         #    pass
 
         # ---- Spawn a translucent, non-colliding solid box ---
-        # self._spawn_workspace_visual_box(
-        #    origin=self.relative_origin,
-        #    limits_min=self.limits_min,
-        #    limits_max=self.limits_max,
-        #    rgba=[0.0, 1.0, 0.0, 0.15],
+        # debug_util.spawn_workspace_visual_box(
+        #     self,
+        #     origin=self.relative_origin,
+        #     limits_min=self.limits_min,
+        #     limits_max=self.limits_max,
+        #     rgba=[0.0, 1.0, 0.0, 0.15],
         # )
 
         # Now show the fully initialized scene (single switch at the very end)
@@ -877,191 +879,6 @@ class BulletClothEnv_:
 
     def close(self):
         self.world.close()
-
-    def _remove_simple_goal_visual(self):
-        if not getattr(self, "_simple_goal_debug_ids", None):
-            return
-        for _id in self._simple_goal_debug_ids:
-            with np.errstate(all="ignore"):
-                p.removeUserDebugItem(_id)
-        self._simple_goal_debug_ids = []
-
-    def _update_simple_goal_visual(self):
-        self._remove_simple_goal_visual()
-        if not getattr(self, "simple_ee_task", False):
-            return
-        goal_I = np.asarray(self.goal, dtype=np.float32)
-        goal_W = (self.relative_origin + goal_I).astype(np.float32)
-        goal_tip = (goal_W + np.array([0.0, 0.0, 0.08], dtype=np.float32)).tolist()
-        color = [1.0, 0.3, 0.1]
-        self._simple_goal_debug_ids = []
-        self._simple_goal_debug_ids.append(
-            p.addUserDebugPoints([goal_W.tolist()], [color], pointSize=12, lifeTime=0)
-        )
-        self._simple_goal_debug_ids.append(
-            p.addUserDebugLine(goal_W.tolist(), goal_tip, color, lineWidth=3.0, lifeTime=0)
-        )
-        self._simple_goal_debug_ids.append(
-            p.addUserDebugText(
-                "EE goal",
-                goal_tip,
-                textColorRGB=color,
-                textSize=1.4,
-                lifeTime=0,
-            )
-        )
-
-    def _spawn_workspace_visual_box(self, origin, limits_min, limits_max, rgba=[0, 1, 0, 0.15]):
-        if getattr(self, "_ws_vis_id", None) is not None:
-            try:
-                p.removeBody(self._ws_vis_id)
-            except Exception:
-                pass
-            self._ws_vis_id = None
-
-        o = np.array(origin, dtype=float)
-        mn = np.array(limits_min, dtype=float)
-        mx = np.array(limits_max, dtype=float)
-        lo = np.minimum(mn, mx)
-        hi = np.maximum(mn, mx)
-        half_extents = (hi - lo) * 0.5
-        center = o + (lo + hi) * 0.5
-
-        vis = p.createVisualShape(
-            shapeType=p.GEOM_BOX,
-            halfExtents=half_extents.tolist(),
-            rgbaColor=rgba,
-        )
-        self._ws_vis_id = p.createMultiBody(
-            baseMass=0.0,
-            baseCollisionShapeIndex=-1,
-            baseVisualShapeIndex=vis,
-            basePosition=center.tolist(),
-            baseOrientation=[0, 0, 0, 1],
-        )
-
-    # ---------------- Task visualization helpers (non-physics) ----------------
-    def _draw_task_visuals(self):
-        if self.task is None:
-            return
-        for _id in getattr(self, "_task_line_ids", []):
-            with np.errstate(all="ignore"):
-                p.removeUserDebugItem(_id)
-        for bid in getattr(self, "_task_marker_ids", []):
-            with np.errstate(all="ignore"):
-                p.removeBody(bid)
-        self._task_line_ids, self._task_marker_ids = [], []
-
-        # High-contrast colors: origin=blue, target=red, goal ray=black, goal point=white
-        col_origin = [0.0, 0.2, 1.0]
-        col_target = [1.0, 0.0, 0.0]
-        col_goal_ray = [0.0, 0.0, 0.0]
-        col_goal_pt = [1.0, 1.0, 1.0]
-        line_w = 2.0
-
-        sph_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.008, rgbaColor=[1, 1, 1, 1])
-        sph_target_vis = p.createVisualShape(
-            p.GEOM_SPHERE, radius=0.008, rgbaColor=col_target + [1.0]
-        )
-        sph_goal_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.012, rgbaColor=[1, 1, 1, 1])
-
-        print(self.task.constraints)
-        # [{'origin': 'S8_8', 'target': 'S0_8', 'distance': 0.187, 'noise_directions': [1, 0, 0]},
-        # {'origin': 'S8_0', 'target': 'S0_0', 'distance': 0.187, 'noise_directions': [1, 0, 0]},
-        # {'origin': 'S4_0', 'target': 'S4_0', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]},
-        # {'origin': 'S4_8', 'target': 'S4_8', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]},
-        # {'origin': 'S0_8', 'target': 'S0_8', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]},
-        # {'origin': 'S0_0', 'target': 'S0_0', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]}]
-
-        seen_label_sites = set()
-
-        for ci, c in enumerate(self.task.constraints):
-            ok = c["origin"]
-            tk = c["target"]
-
-            idx_o = self.cloth._site_indices[ok]
-            idx_t = self.cloth._site_indices[tk]
-            o = np.array(self.cloth.get_position(idx_o), dtype=float)
-            t = np.array(self.cloth.get_position(idx_t), dtype=float)
-            goal_seg_I = self.goal[ci * 3 : (ci + 1) * 3]
-            g = self.relative_origin + goal_seg_I  # goal expressed in world frame
-            same_site = ok == tk
-
-            if not same_site:
-                self._task_line_ids.append(
-                    p.addUserDebugLine(
-                        o.tolist(), t.tolist(), [0.9, 0.9, 0.9], lineWidth=line_w, lifeTime=0
-                    )
-                )
-
-            self._task_line_ids.append(
-                p.addUserDebugLine(
-                    o.tolist(), g.tolist(), col_goal_ray, lineWidth=line_w, lifeTime=0
-                )
-            )
-
-            self._task_marker_ids.append(
-                p.createMultiBody(
-                    baseMass=0.0,
-                    baseCollisionShapeIndex=-1,
-                    baseVisualShapeIndex=sph_vis,
-                    basePosition=o.tolist(),
-                )
-            )
-            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_origin + [1.0])
-            self._task_marker_ids.append(
-                p.createMultiBody(
-                    baseMass=0.0,
-                    baseCollisionShapeIndex=-1,
-                    baseVisualShapeIndex=sph_target_vis,
-                    basePosition=t.tolist(),
-                )
-            )
-            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_target + [1.0])
-
-            self._task_marker_ids.append(
-                p.createMultiBody(
-                    baseMass=0.0,
-                    baseCollisionShapeIndex=-1,
-                    baseVisualShapeIndex=sph_vis,
-                    basePosition=g.tolist(),
-                )
-            )
-            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_goal_pt + [1.0])
-
-            self._task_marker_ids.append(
-                p.createMultiBody(
-                    baseMass=0.0,
-                    baseCollisionShapeIndex=-1,
-                    baseVisualShapeIndex=sph_goal_vis,
-                    basePosition=g.tolist(),
-                )
-            )
-            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_goal_pt + [1.0])
-
-            if ok not in seen_label_sites:
-                self._task_line_ids.append(
-                    p.addUserDebugText(
-                        f"{ok}", o.tolist(), textColorRGB=col_origin, textSize=1.2, lifeTime=0
-                    )
-                )
-                seen_label_sites.add(ok)
-            target_label_pos = t.tolist()
-            if same_site:
-                # Slight offset keeps overlapping labels readable for self-constraints (e.g., mid)
-                target_label_pos = (t + np.array([0.0, 0.0, 0.02])).tolist()
-            if tk not in seen_label_sites:
-                self._task_line_ids.append(
-                    p.addUserDebugText(
-                        f"{tk}", target_label_pos, textColorRGB=col_target, textSize=1.2, lifeTime=0
-                    )
-                )
-                seen_label_sites.add(tk)
-            self._task_line_ids.append(
-                p.addUserDebugText(
-                    f"G{ci}", g.tolist(), textColorRGB=col_goal_pt, textSize=1.2, lifeTime=0
-                )
-            )
 
 
 class ClothEnvBullet(BulletClothEnv_, EzPickle):
