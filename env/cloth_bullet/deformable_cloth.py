@@ -232,8 +232,8 @@ class DeformableCloth:
             for c, x in enumerate(xs):
                 d2 = (xy[:, 0] - x) ** 2 + (xy[:, 1] - y) ** 2
                 best_idx = int(np.argmin(d2))
-                sites[f"S{r}_{c}"] = f"v_{best_idx}"
-                site_indices[f"S{r}_{c}"] = best_idx
+                sites[f"S{c}_{r}"] = f"v_{best_idx}"
+                site_indices[f"S{c}_{r}"] = best_idx
         self.sites = sites
         self._site_indices = site_indices
 

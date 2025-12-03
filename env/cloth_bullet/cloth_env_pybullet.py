@@ -104,7 +104,6 @@ class BulletClothEnv_:
         )
 
         # --- Optional simple EE-reaching task ---
-        # Allows bypassing the cloth FoldingTask with a static EE target in I-coordinates.
         self.simple_ee_task = False
         self.simple_ee_goal_I = np.array(
             self.randomization_kwargs.get("simple_ee_goal_I", [-0.1, -0.1, 0.1]), dtype=np.float32
@@ -154,11 +153,6 @@ class BulletClothEnv_:
 
     @property
     def task_reward_function(self):
-        """
-        Provides the task_reward_function for compatibility with the training script,
-        forwarding it from the internal FoldingTask instance. When a simple
-        EE-reaching task is active, return a small closure implementing that reward.
-        """
         if getattr(self, "simple_ee_task", False):
 
             def _reward_fn(achieved, desired, info):
@@ -175,7 +169,6 @@ class BulletClothEnv_:
                 return reward
 
             return _reward_fn
-
         return self.task.reward_function
 
     def seed(self, seed=None):
@@ -185,7 +178,6 @@ class BulletClothEnv_:
     def reset(self):
         self.current_step = 0
         # self._remove_simple_goal_visual()
-        # Hide intermediate loads & speed up reset (single guard)
         try:
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
@@ -195,9 +187,7 @@ class BulletClothEnv_:
             pass
         self.episode_ee_close_steps = 0
         self.world.reset()
-        if self.randomization_kwargs[
-            "dynamics_randomization"
-        ]:  # Check if dynamics randomization is good name
+        if self.randomization_kwargs["dynamics_randomization"]:
             self.world.apply_domain_randomization(self.randomization_kwargs)
 
         # Create robot and cloth
@@ -207,12 +197,11 @@ class BulletClothEnv_:
         self.robot = PandaRobot(
             base_position=base_pos, base_orientation=base_orn, robot_cfg=robot_cfg
         )
-        # Robot dynamics DR (only if master switch is ON)
+        # Robot dynamics DR
         if self.randomization_kwargs["dynamics_randomization"]:
             _lin = float(np.random.uniform(*robot_cfg["lin_damping_range"]))
             _ang = float(np.random.uniform(*robot_cfg["ang_damping_range"]))
             _frc = float(np.random.uniform(*robot_cfg["lateral_friction_range"]))
-            # Prefer the PandaRobot helper if present; call positionally for max compatibility.
             self.robot.randomize_dynamics(_lin, _ang, _frc)
         else:
             _lin = float(robot_cfg["lin_damping"])
@@ -227,8 +216,6 @@ class BulletClothEnv_:
             initial_cloth_pos_xy[1],
             self.world.get_table_top_z(),
         ]
-
-        # ---- Cloth domain randomization (physics + size + optional color) ----
 
         # --- Cloth size ---
         if self.randomization_kwargs["dynamics_randomization"]:
@@ -257,18 +244,17 @@ class BulletClothEnv_:
         for _ in range(cloth_cfg["settle_steps"]):
             self.world.step()
 
-        # Update cloth vertices after settling so IK and obs are correct
+        # Update cloth vertices after settling
         self.cloth.update()
-        # Reset previous vertices to current to avoid massive velocity spike on first step
-        self.cloth._prev_verts_W = self.cloth.get_raw_vertex_positions().copy()
+        # Reset previous vertices to avoid velocity spike
+        self.cloth._prev_verts_raw = self.cloth._cached_verts_raw  # Init history
 
-        # Set camera target to the cloth's center, matching MuJoCo's lookatbody
+        # Set camera target
         center_v_name = self.cloth.corner_v_names["mid"]
         center_idx = int(center_v_name.split("_")[1])
         self._camera_target = self.cloth.get_position(center_idx)
         self.camera.begin_episode(self._camera_target)
 
-        # Initialize the task (optional simple EE goal bypasses FoldingTask)
         if self.simple_ee_task:
             self.task = None
         else:
@@ -286,37 +272,33 @@ class BulletClothEnv_:
                 self.success_reward,
             )
 
-        # Move robot to grasp corner
-        corner_v_name = self.cloth.corner_v_names["0"]
-        corner_idx = int(corner_v_name.split("_")[1])
-        corner_world_pos = self.cloth.get_position(corner_idx)
+        # Move robot to grasp the same corner used as the primary origin site (MuJoCo parity)
+        anchor_site_name = None
+        if self.task and self.task.constraints:
+            anchor_site_name = self.task.constraints[0]["origin"]
+
+        if anchor_site_name and anchor_site_name in self.cloth._site_indices:
+            anchor_idx = self.cloth._site_indices[anchor_site_name]
+            anchor_v_name = f"v_{anchor_idx}"
+        else:
+            # Fallback to geometric top-right if something is off
+            anchor_v_name = self.cloth.corner_v_names["0"]
+            anchor_idx = int(anchor_v_name.split("_")[1])
+
+        anchor_world_pos = self.cloth.get_position(anchor_idx)
 
         # First pass IK
-        joint_positions = self.robot.calculate_ik(corner_world_pos)
+        joint_positions = self.robot.calculate_ik(anchor_world_pos)
         self.robot.reset_to_joint_positions(joint_positions)
 
-        # Check error and do a second pass only if needed.
         ee_now = self.robot.get_ee_position_W()
-        if np.linalg.norm(corner_world_pos - ee_now) > 1e-4:
-            joint_positions = self.robot.calculate_ik(corner_world_pos)
+        if np.linalg.norm(anchor_world_pos - ee_now) > 1e-4:
+            joint_positions = self.robot.calculate_ik(anchor_world_pos)
             self.robot.reset_to_joint_positions(joint_positions)
             self.world.step()
 
-        # Ensure orientation is locked before making the soft anchor (silent unless summary below)
-        """
-        ee_quat = self.robot.get_ee_pose_W()
-        orn_err_deg = self.robot.quat_angle_error_deg(ee_quat, self.robot._ik_target_quat)
-        if orn_err_deg > 0.5:  # ~0.5° tolerance
-            joint_positions = self.robot.calculate_ik(corner_world_pos)
-            self.robot.reset_to_joint_positions(joint_positions)
-            self.world.step()
-            ee_quat = self.robot.get_ee_pose_W()
-            orn_err_deg = self.robot.quat_angle_error_deg(ee_quat, self.robot._ik_target_quat)
-        """
-        # Anchor cloth to robot's hand (using the correct ee_link_index)
-        self.cloth.create_anchor(corner_v_name, self.robot.robot_id, self.robot.ee_link_index)
+        self.cloth.create_anchor(anchor_v_name, self.robot.robot_id, self.robot.ee_link_index)
 
-        # Initialize state variables based on final EE position
         self.relative_origin = self.robot.get_ee_position_W()
         self.desired_pos_step_W = self.relative_origin.copy()
         self.desired_pos_ctrl_W = self.relative_origin.copy()
@@ -326,22 +308,33 @@ class BulletClothEnv_:
         self.episode_ee_close_steps = 0
         self._prev_ee_pos_W = self.robot.get_ee_position_W()
 
-        # Set goal for the episode
         if self.simple_ee_task:
             self.goal = self.simple_ee_goal_I.astype(np.float32)
             self.goal_noise = 0.0
         else:
             self.goal, self.goal_noise = self.task.sample_goal(self.get_cloth_position_I())
+            # Debug: log origins/targets/goal positions at reset for sanity checks
+            if os.getenv("DEBUG_TASK", "0") == "1":
+                print("\n[DEBUG_TASK] Constraint info at reset:")
+                for i, c in enumerate(self.task.constraints):
+                    o = c["origin"]
+                    t = c["target"]
+                    o_pos = (
+                        self.cloth.get_position(self.cloth._site_indices[o]) - self.relative_origin
+                    )
+                    t_pos = (
+                        self.cloth.get_position(self.cloth._site_indices[t]) - self.relative_origin
+                    )
+                    g_pos = self.goal[i * 3 : (i + 1) * 3]
+                    print(
+                        f"  {i}: origin={o} pos={o_pos}, target={t} pos={t_pos}, goal={g_pos}, dist={c['distance']}"
+                    )
 
-        # self._update_simple_goal_visual()
-
-        # Capture initial image (viewer can stay off; camera grabs directly)
         img = self.get_image_obs()
         self.frame_stack.clear()
         for _ in range(self.frame_stack_size):
             self.frame_stack.append(img)
 
-        # Randomize cloth color (skip if DeformableCloth already tinted)
         if self.randomization_kwargs["materials_randomization"] and not getattr(
             self.cloth, "_tint_applied", False
         ):
@@ -373,9 +366,7 @@ class BulletClothEnv_:
                     cameraPitch=float(vcam["pitch"]),
                     cameraTargetPosition=self._camera_target,
                 )
-            # Turn rendering back on…
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
-            # …and re-enable preview panes (RGB on by default; depth/seg off unless requested)
             if self.has_viewer:
                 p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
                 p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
@@ -393,6 +384,12 @@ class BulletClothEnv_:
 
     def step(self, action):
         raw_action = action.copy()
+        # Coordinate parity: MuJoCo actions are mirrored relative to Bullet on X.
+        # Flip X so MuJoCo demos/policies move the cloth in the same direction here.
+        raw_action[0] = -raw_action[0]
+
+        if os.getenv("DEBUG_ACTION", "0") == "1" and self.current_step < 5:
+            print(f"[DEBUG_ACTION] step={self.current_step} raw_action(after flip)={raw_action}")
         # 1. Save raw action for observation
 
         # Capture previous EE position for movement calculation (t-1)
@@ -418,6 +415,11 @@ class BulletClothEnv_:
             self.desired_pos_step_W + action, self.min_absolute_W, self.max_absolute_W
         )
 
+        if os.getenv("DEBUG_ACTION", "0") == "1" and self.current_step < 5:
+            print(
+                f"[DEBUG_ACTION] step={self.current_step} desired_pos_step_W={self.desired_pos_step_W} ee_W={self.robot.get_ee_position_W()}"
+            )
+
         # TODO Safety: prevent digging into table (maybe remove)
         table_z = self.world.get_table_top_z()
         if self.desired_pos_step_W[2] < table_z:
@@ -428,30 +430,28 @@ class BulletClothEnv_:
 
         # 5. Substep Loop (Physics & Filter Integration)
         for i in range(self.substeps):
-            # Simulate the analog low-pass filter (capacitor)
-            # We iterate `between_steps` times to smooth the signal
             for _ in range(self.between_steps):
                 self.desired_pos_ctrl_W = (
                     self.ctrl_filter * self.desired_pos_step_W
                     + (1 - self.ctrl_filter) * self.desired_pos_ctrl_W
                 )
 
-            # TODO OPTIMIZATION: Throttled IK (Every 4 substeps = ~120Hz)
-            # This drastically reduces CPU load. (maybe remove)
-            if i % 4 == 0:
+            # OPTIMIZATION: Throttled IK (Every 8 substeps = ~60Hz)
+            # if i % 8 == 0:
+            #    joint_positions = self.robot.calculate_ik(self.desired_pos_ctrl_W)
+            if i == 0:
                 joint_positions = self.robot.calculate_ik(self.desired_pos_ctrl_W)
 
-            # 7. Apply control and step physics
             if joint_positions is not None:
                 self.robot.apply_joint_positions(joint_positions)
             self.robot.force_fingers_closed()
             self.world.step()
 
-            self.cloth.update()
-
-            # 8. Capture image if it's the right substep
             if i == image_obs_substep_idx:
                 self.frame_stack.append(self.get_image_obs())
+
+        # Update Mesh ONCE per step, just before observations
+        self.cloth.update()
 
         obs = self.get_obs()
         reward, done, info = self._get_reward_and_done(obs, raw_action)
@@ -459,16 +459,10 @@ class BulletClothEnv_:
         self.current_step += 1
         self.previous_raw_action = raw_action.copy()
 
-        # try:
-        #    if self.has_viewer:
-        #        self.camera.print_gui_camera_as_type(name=f"step_{self.current_step:04d}")
-        # except Exception:
-        #    pass
-
-        # Sanity Check for NaNs
-        for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):
-            if np.any(np.isnan(obs[k])):
-                raise ValueError(f"NaN in obs['{k}'] detected!")
+        # OPTIMIZATION: Removed sanity check loop for speed
+        # for k in ("image", "observation", "robot_observation", "achieved_goal", "desired_goal"):
+        #    if np.any(np.isnan(obs[k])):
+        #        raise ValueError(f"NaN in obs['{k}'] detected!")
 
         return obs, reward, done, info
 
@@ -485,10 +479,7 @@ class BulletClothEnv_:
 
             # --- New Pybullet Action Penalty ---
             # Penalize large actions to encourage smoothness/stopping.
-            # 0.1 is a common weight. If raw_action is [1,1,1], penalty is 0.3.
-            # If raw_action is [0,0,0], penalty is 0.
             action_penalty = np.sum(np.square(raw_action)) * 0.1
-            # --- FIX END ---
 
             # 4. Dense Reward
             if is_success:
@@ -506,7 +497,7 @@ class BulletClothEnv_:
                 "reward": float(reward),
                 "is_success": bool(is_success),
                 "dist_to_target": dist_to_target,
-                "action_penalty": float(action_penalty),  # Good for debugging logs
+                "action_penalty": float(action_penalty),
                 "delta_size": float(np.linalg.norm(raw_action)),
                 "ctrl_error": float(
                     np.linalg.norm(self.desired_pos_ctrl_W - self.robot.get_ee_position_W())
@@ -533,43 +524,43 @@ class BulletClothEnv_:
         reward = task_reward - action_penalty
 
         # --- OPTIMIZATION: Use direct integer access (FAST) ---
-        # REMOVED: verts_W = self.cloth.get_positions_W()
-
-        distances = {}
-        all_targets_I = [self.goal[i * 3 : (i + 1) * 3] for i in range(len(self.task.constraints))]
-
-        site_name_to_goal_idx = {c["origin"]: i for i, c in enumerate(self.task.constraints)}
-
-        for corner_key in ("0", "1", "2", "3"):
-            # Get the Vertex ID directly from string "v_123" -> 123
-            v_str = self.cloth.corner_v_names[corner_key]
-            v_id = int(v_str.split("_")[1])
-
-            # FAST ACCESS: O(1)
+        # Distances per constraint origin → its goal vector (MuJoCo parity)
+        constraint_dists = {}
+        for i, c in enumerate(self.task.constraints):
+            site_name = c["origin"]
+            v_id = self.cloth._site_indices.get(site_name, None)
+            if v_id is None:
+                constraint_dists[site_name] = 0.0
+                continue
             achieved_pos_I = self.cloth.get_position(v_id) - self.relative_origin
+            target_pos_I = self.goal[i * 3 : (i + 1) * 3]
+            constraint_dists[site_name] = float(np.linalg.norm(achieved_pos_I - target_pos_I))
 
-            # Find site name for this vertex index
-            site_name = None
-            for s_name, s_idx in self.cloth._site_indices.items():
-                if s_idx == v_id:
-                    site_name = s_name
-                    break
-
-            if site_name and site_name in site_name_to_goal_idx:
-                goal_idx = site_name_to_goal_idx[site_name]
-                target_pos_I = self.goal[goal_idx * 3 : (goal_idx + 1) * 3]
-                distances[corner_key] = float(np.linalg.norm(achieved_pos_I - target_pos_I))
-            elif all_targets_I:
-                distances[corner_key] = float(
-                    min(np.linalg.norm(achieved_pos_I - t) for t in all_targets_I)
+        if os.getenv("DEBUG_TASK_STEP", "0") == "1" and self.current_step < 5:
+            print(f"[DEBUG_TASK_STEP] step={self.current_step}")
+            for i, c in enumerate(self.task.constraints):
+                site_name = c["origin"]
+                v_id = self.cloth._site_indices.get(site_name, None)
+                achieved_pos_I = (
+                    self.cloth.get_position(v_id) - self.relative_origin
+                    if v_id is not None
+                    else None
                 )
-            else:
-                distances[corner_key] = 0.0
+                target_pos_I = self.goal[i * 3 : (i + 1) * 3]
+                print(
+                    f"  {site_name}: achieved={achieved_pos_I}, target={target_pos_I}, dist={constraint_dists.get(site_name)}"
+                )
 
-        dist_to_target = distances["1"]
+        # Map the primary corner metrics to the first two corner constraints (sideways uses S8_8, S0_8)
+        distances = {
+            "0": constraint_dists.get("S0_8", 0.0),
+            "1": constraint_dists.get("S8_8", 0.0),
+            "2": constraint_dists.get("S0_0", 0.0),
+            "3": constraint_dists.get("S8_0", 0.0),
+        }
+        dist_to_target = distances.get("1", 0.0)
         is_success = task_reward > self.fail_reward
 
-        # Get corner positions for visualization (fast access)
         corner_pixels = self._get_corner_image_positions().astype(np.float32)
 
         info = {
@@ -606,10 +597,6 @@ class BulletClothEnv_:
         return reward, done, info
 
     def _project_points_uv(self, points_W, label="points", cam_type="default"):
-        """
-        Project world points to normalized UVs [0,1] using the SAME camera as the image.
-        For 'default' views, use the episode/policy camera. For 'eval_camera', use the stable view.
-        """
         if cam_type == "eval_camera":
             cam_setup = self.camera.get_stable_camera_setup(self._camera_target, cam_type=cam_type)
             view, proj = self.camera.get_stable_view_projection_matrices(
@@ -623,8 +610,7 @@ class BulletClothEnv_:
         P = np.array(proj, dtype=np.float64).reshape(4, 4).T
         VP = P @ V
 
-        # Normalize by the target image buffer we drew into
-        W_render, H_render = self.camera.render_size  # 500x500 for big, 100x100 for small
+        W_render, H_render = self.camera.render_size
 
         per_point = []
         uv_full = []
@@ -635,9 +621,9 @@ class BulletClothEnv_:
                 per_point.append({"world": [float(x), float(y), float(z)], "invalid": True})
                 uv_full.extend([0.0, 0.0])
                 continue
-            ndc = (clip[:3] / clip[3]).astype(np.float64)  # (-1..1)
+            ndc = (clip[:3] / clip[3]).astype(np.float64)
             x_pix = (ndc[0] + 1.0) * 0.5 * W_render
-            y_pix = (1.0 - ndc[1]) * 0.5 * H_render  # flip Y
+            y_pix = (1.0 - ndc[1]) * 0.5 * H_render
             u_full = float(np.clip(x_pix / max(1, W_render), 0.0, 1.0))
             v_full = float(np.clip(y_pix / max(1, H_render), 0.0, 1.0))
             per_point.append(
@@ -659,17 +645,22 @@ class BulletClothEnv_:
         }
         return out
 
-    # ---------- CORNER UVs ----------
     def _get_corner_image_positions(self, cam_type="default"):
-        names = ["0", "1", "2", "3"]
-        named_pts = []
-        for n in names:
-            v_str = self.cloth.corner_v_names[n]  # e.g. "v_123"
-            v_id = int(v_str.split("_")[1])
-            named_pts.append(self.cloth.get_position(v_id))
+        # Same order as MuJoCo corner_index_mapping:
+        # 0: S0_8, 1: S8_8, 2: S0_0, 3: S8_0
+        site_order = ["S0_8", "S8_8", "S0_0", "S8_0"]
 
-        named_log = self._project_points_uv(named_pts, label="named_corners", cam_type=cam_type)
-        return np.array(named_log["uv_full"], dtype=np.float32)
+        pts = []
+        for s in site_order:
+            idx = self.cloth._site_indices.get(s)
+            if idx is None:
+                # Fallback: if for some reason the site is missing, fall back to geometric corner
+                # (shouldn't normally happen)
+                return np.array([], dtype=np.float32)
+            pts.append(self.cloth.get_position(idx))
+
+        log = self._project_points_uv(pts, label="corners", cam_type=cam_type)
+        return np.array(log["uv_full"], dtype=np.float32)
 
     def get_image_obs(self):
         return self.camera.policy_image(self._camera_target)
@@ -686,33 +677,23 @@ class BulletClothEnv_:
         if self.simple_ee_task:
             # 1. Calculate dimensions exactly like the full task to match network size
             n_sites = len(self.cloth.sites)
-            cloth_dim = n_sites * 3 * 2  # pos + vel
+            cloth_dim = n_sites * 3 * 2
             physics_dim = 9 if self.randomization_kwargs["dynamics_randomization"] else 0
-
-            # 2. Create the zero vector
             cloth_obs = np.zeros(cloth_dim + physics_dim, dtype=np.float32)
-
-            # 3. Inject EE state
-            cloth_obs[0:3] = ee_pos_I  # Position
-            cloth_obs[3:6] = ee_vel_W  # Velocity
-
+            cloth_obs[0:3] = ee_pos_I
+            cloth_obs[3:6] = ee_vel_W
             achieved_goal = ee_pos_I.astype(np.float32)
         else:
-            # --- OPTIMIZATION: Use fast path ---
             cloth_pos_I, vel_sites_W = self.cloth.get_site_observations(
                 self.timestep, self.relative_origin
             )
-
             achieved_goal = self.task.get_achieved_goal(cloth_pos_I)
-
             cloth_obs = np.concatenate(
                 [
                     np.array(list(cloth_pos_I.values())).flatten(),
                     np.array(list(vel_sites_W.values())).flatten(),
                 ]
             )
-
-            # --- Physics DR scalars (MuJoCo parity) ---
             if self.randomization_kwargs["dynamics_randomization"]:
                 g = float(self.world.gravity)
                 tab_mu = float(self.world.table_lateral_friction)
@@ -765,8 +746,6 @@ class BulletClothEnv_:
         return self.robot.get_ee_position_W() - self.relative_origin
 
     def get_ee_velocity(self):
-        # Retrieve linear velocity (index 6) from LinkState
-        # computeLinkVelocity=1 is required in recent PyBullet versions
         ls = p.getLinkState(self.robot.robot_id, self.robot.ee_link_index, computeLinkVelocity=1)
         return np.array(ls[6], dtype=np.float32)
 
@@ -777,7 +756,6 @@ class BulletClothEnv_:
         return self.robot.get_joint_velocities()
 
     def get_cloth_position_I(self):
-        # Optimized to use _site_indices directly
         positions = {}
         for site, idx in self.cloth._site_indices.items():
             positions[site] = self.cloth.get_position(idx) - self.relative_origin
@@ -792,11 +770,6 @@ class BulletClothEnv_:
         camera_type="default",
         ee_in_image=None,
     ):
-        """
-        Draw GT (blue) + optional aux (green) corner dots on an image (no crop).
-        If 'img' is None, a stable RGB frame is rendered at the camera's full size.
-        """
-        # Stable RGB unless a specific image is provided
         if img is None:
             img = self.camera.render_rgb(self._camera_target, cam_type=camera_type)
         h, w = img.shape[:2]
@@ -818,11 +791,6 @@ class BulletClothEnv_:
         # Green: predicted (assumed already in [0,1]); use first 8 values (4 uv pairs)
         if aux_output is not None:
             flat = np.asarray(aux_output, dtype=np.float32).flatten()[:8]
-            # If predictions look like pixels (e.g., ~[0..100]), normalize to [0,1]
-            # if np.nanmax(flat) > 1.0:
-            #    W_ref, H_ref = self.image_size  # policy/CNN input size
-            #    flat[0::2] = flat[0::2] / float(W_ref)
-            #    flat[1::2] = flat[1::2] / float(H_ref)
             flat = np.clip(flat, 0.0, 1.0)
             for i in range(0, min(len(flat), 8), 2):
                 au = int(np.clip(flat[i] * w, 0, w - 1))
@@ -834,10 +802,6 @@ class BulletClothEnv_:
         return img
 
     def capture_images(self, aux_output=None):
-        """
-        Mirrors MuJoCo's capture_images():
-        returns (corner_image, eval_image, cnn_color_image_full, cnn_color_image, cnn_image).
-        """
         if aux_output is None:
             print("[Bullet] capture_images: aux_output is None", flush=True)
 
@@ -845,13 +809,11 @@ class BulletClothEnv_:
         ee_pos = self.get_ee_position_W()
         ee_in_image[:3] = ee_pos
 
-        # Render the SAME policy/off-screen camera at both sizes (no crop)
         policy_rgb_big = self.camera.render_rgb_dr(
             self._camera_target, size=self.camera.render_size
         )
-        policy_rgb_small = self.camera.render_rgb_dr(self._camera_target)  # defaults to image_size
+        policy_rgb_small = self.camera.render_rgb_dr(self._camera_target)
 
-        # 0) Corner overlay (DEFAULT view), larger dots for visibility (8px)
         corner_image = self.get_masked_image(
             point_size=8,
             greyscale=False,
@@ -861,7 +823,6 @@ class BulletClothEnv_:
             ee_in_image=ee_in_image,
         )
 
-        # 2) CNN color image (FULL render buffer), tiny dots (2px)
         cnn_color_image_full = self.get_masked_image(
             point_size=2,
             greyscale=False,
@@ -871,7 +832,6 @@ class BulletClothEnv_:
             ee_in_image=ee_in_image,
         )
 
-        # 3) CNN color image (policy size, no crop)
         cnn_color_image = self.get_masked_image(
             point_size=2,
             greyscale=False,
@@ -881,7 +841,6 @@ class BulletClothEnv_:
             ee_in_image=ee_in_image,
         )
 
-        # 4) CNN grayscale image (policy size, no crop)
         cnn_image = self.get_masked_image(
             point_size=2,
             greyscale=True,
@@ -890,12 +849,7 @@ class BulletClothEnv_:
             camera_type="default",
             ee_in_image=ee_in_image,
         )
-        # Use the policy_image pipeline to get the exact grayscale
-        # cnn_image_flat = self.camera.policy_image(self._camera_target)  # [0,1], flat
-        # cnn_image = (cnn_image_flat.reshape(h_cnn, w_cnn) * 255.0).astype("uint8")
 
-        # 1) Eval image from eval_camera (stable), smaller dots (4px), no aux overlay)
-        # Do this LAST so the GUI preview (if enabled) settles on the eval view.
         eval_image_rgb = self.camera.render_rgb_full(self._camera_target, cam_type="eval_camera")
         eval_image = self.get_masked_image(
             point_size=4,
@@ -909,7 +863,6 @@ class BulletClothEnv_:
         return (corner_image, eval_image, cnn_color_image_full, cnn_color_image, cnn_image)
 
     def get_trajectory_log_entry(self):
-        """Returns a dictionary of info for logging, matching original keys."""
         return {
             "origin": self.relative_origin,
             "output_max": self.output_max,
@@ -959,8 +912,6 @@ class BulletClothEnv_:
         )
 
     def _spawn_workspace_visual_box(self, origin, limits_min, limits_max, rgba=[0, 1, 0, 0.15]):
-        """Create a translucent box that matches the workspace. No collisions."""
-        # Remove previous visual box if it exists
         if getattr(self, "_ws_vis_id", None) is not None:
             try:
                 p.removeBody(self._ws_vis_id)
@@ -971,7 +922,6 @@ class BulletClothEnv_:
         o = np.array(origin, dtype=float)
         mn = np.array(limits_min, dtype=float)
         mx = np.array(limits_max, dtype=float)
-        # Be robust to swapped min/max:
         lo = np.minimum(mn, mx)
         hi = np.maximum(mn, mx)
         half_extents = (hi - lo) * 0.5
@@ -992,10 +942,8 @@ class BulletClothEnv_:
 
     # ---------------- Task visualization helpers (non-physics) ----------------
     def _draw_task_visuals(self):
-        """Draws: (1) origin→target line per constraint, (2) origin→goal ray, (3) small spheres on sites."""
         if self.task is None:
             return
-        # Clear previous
         for _id in getattr(self, "_task_line_ids", []):
             with np.errstate(all="ignore"):
                 p.removeUserDebugItem(_id)
@@ -1004,44 +952,54 @@ class BulletClothEnv_:
                 p.removeBody(bid)
         self._task_line_ids, self._task_marker_ids = [], []
 
-        # Colors
-        col_origin = [0.1, 0.6, 1.0]  # blue-ish
-        col_target = [1.0, 0.8, 0.1]  # yellow-ish
-        col_goal_ray = [0.2, 1.0, 0.4]  # green-ish
+        # High-contrast colors: origin=blue, target=red, goal ray=black, goal point=white
+        col_origin = [0.0, 0.2, 1.0]
+        col_target = [1.0, 0.0, 0.0]
+        col_goal_ray = [0.0, 0.0, 0.0]
+        col_goal_pt = [1.0, 1.0, 1.0]
         line_w = 2.0
 
-        # Tiny sphere visual shape (reused)
         sph_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.008, rgbaColor=[1, 1, 1, 1])
+        sph_target_vis = p.createVisualShape(
+            p.GEOM_SPHERE, radius=0.008, rgbaColor=col_target + [1.0]
+        )
+        sph_goal_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.012, rgbaColor=[1, 1, 1, 1])
+
+        print(self.task.constraints)
+        # [{'origin': 'S8_8', 'target': 'S0_8', 'distance': 0.187, 'noise_directions': [1, 0, 0]},
+        # {'origin': 'S8_0', 'target': 'S0_0', 'distance': 0.187, 'noise_directions': [1, 0, 0]},
+        # {'origin': 'S4_0', 'target': 'S4_0', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]},
+        # {'origin': 'S4_8', 'target': 'S4_8', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]},
+        # {'origin': 'S0_8', 'target': 'S0_8', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]},
+        # {'origin': 'S0_0', 'target': 'S0_0', 'distance': 0.187, 'noise_directions': [1.0, 1.0, 0.0]}]
+
+        seen_label_sites = set()
 
         for ci, c in enumerate(self.task.constraints):
             ok = c["origin"]
-            tk = c["target"]  # site names (e.g., "S0_8")
+            tk = c["target"]
 
             idx_o = self.cloth._site_indices[ok]
             idx_t = self.cloth._site_indices[tk]
             o = np.array(self.cloth.get_position(idx_o), dtype=float)
             t = np.array(self.cloth.get_position(idx_t), dtype=float)
+            goal_seg_I = self.goal[ci * 3 : (ci + 1) * 3]
+            g = self.relative_origin + goal_seg_I  # goal expressed in world frame
+            same_site = ok == tk
 
-            # 1) Origin → Target line (white-ish to distinguish)
-            self._task_line_ids.append(
-                p.addUserDebugLine(
-                    o.tolist(), t.tolist(), [0.9, 0.9, 0.9], lineWidth=line_w, lifeTime=0
+            if not same_site:
+                self._task_line_ids.append(
+                    p.addUserDebugLine(
+                        o.tolist(), t.tolist(), [0.9, 0.9, 0.9], lineWidth=line_w, lifeTime=0
+                    )
                 )
-            )
 
-            # 2) Origin → Goal ray (distance per constraint, no noise)
-            dvec = t - o  # direction to target
-            nrm = np.linalg.norm(dvec)
-            if nrm > 1e-9:
-                dvec = dvec / nrm  # unit
-            g = o + dvec * float(c["distance"])
             self._task_line_ids.append(
                 p.addUserDebugLine(
                     o.tolist(), g.tolist(), col_goal_ray, lineWidth=line_w, lifeTime=0
                 )
             )
 
-            # 3) Small non-colliding markers on origin (blue) and target (yellow)
             self._task_marker_ids.append(
                 p.createMultiBody(
                     baseMass=0.0,
@@ -1055,25 +1013,55 @@ class BulletClothEnv_:
                 p.createMultiBody(
                     baseMass=0.0,
                     baseCollisionShapeIndex=-1,
-                    baseVisualShapeIndex=sph_vis,
+                    baseVisualShapeIndex=sph_target_vis,
                     basePosition=t.tolist(),
                 )
             )
             p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_target + [1.0])
 
-            # 4) Labels (origin/target indices)
-            self._task_line_ids.append(
-                p.addUserDebugText(
-                    f"{ok}", o.tolist(), textColorRGB=col_origin, textSize=1.2, lifeTime=0
+            self._task_marker_ids.append(
+                p.createMultiBody(
+                    baseMass=0.0,
+                    baseCollisionShapeIndex=-1,
+                    baseVisualShapeIndex=sph_vis,
+                    basePosition=g.tolist(),
                 )
             )
-            self._task_line_ids.append(
-                p.addUserDebugText(
-                    f"{tk}", t.tolist(), textColorRGB=col_target, textSize=1.2, lifeTime=0
-                )
-            )
+            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_goal_pt + [1.0])
 
-        # Keep the tiny sphere visual handle alive (it’s owned by markers; OK to leave)
+            self._task_marker_ids.append(
+                p.createMultiBody(
+                    baseMass=0.0,
+                    baseCollisionShapeIndex=-1,
+                    baseVisualShapeIndex=sph_goal_vis,
+                    basePosition=g.tolist(),
+                )
+            )
+            p.changeVisualShape(self._task_marker_ids[-1], -1, rgbaColor=col_goal_pt + [1.0])
+
+            if ok not in seen_label_sites:
+                self._task_line_ids.append(
+                    p.addUserDebugText(
+                        f"{ok}", o.tolist(), textColorRGB=col_origin, textSize=1.2, lifeTime=0
+                    )
+                )
+                seen_label_sites.add(ok)
+            target_label_pos = t.tolist()
+            if same_site:
+                # Slight offset keeps overlapping labels readable for self-constraints (e.g., mid)
+                target_label_pos = (t + np.array([0.0, 0.0, 0.02])).tolist()
+            if tk not in seen_label_sites:
+                self._task_line_ids.append(
+                    p.addUserDebugText(
+                        f"{tk}", target_label_pos, textColorRGB=col_target, textSize=1.2, lifeTime=0
+                    )
+                )
+                seen_label_sites.add(tk)
+            self._task_line_ids.append(
+                p.addUserDebugText(
+                    f"G{ci}", g.tolist(), textColorRGB=col_goal_pt, textSize=1.2, lifeTime=0
+                )
+            )
 
 
 class ClothEnvBullet(BulletClothEnv_, EzPickle):

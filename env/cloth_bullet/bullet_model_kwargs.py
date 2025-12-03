@@ -65,8 +65,6 @@ RANDOMIZATION_DEFAULTS = {
         "color_range": [[0.6, 0.6, 0.6], [1.0, 1.0, 1.0]],
     },
     # geometry sizing (global fallback used by cloth if cloth.scale_range is missing)
-    "cloth_size_range": [0.10, 0.2],  # DEPRECATED: use cloth.scale_range
-    "cloth_size": 0.26,  # DEPRECATED: use cloth.scale
     # per-object sections
     "cloth": {
         "uv": {
@@ -82,14 +80,17 @@ RANDOMIZATION_DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
-        "obj_dir_fallback": "assets/cloth/grid_9",
+        "obj_dir_fallback": "assets/cloth/perfect_9",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
         # visible color when the cloth first spawns (before texture/tint DR)
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
-        "scale_range": [0.10, 0.15],  # used when DR is ON
-        "scale": 0.15,  # deterministic fallback used when DR is OFF
+        # Match demo cloth edge length (~0.10 m) for parity with MuJoCo recordings
+        "scale_range": [0.10, 0.10],  # used when DR is ON
+        "scale": 0.095,  # deterministic fallback used when DR is OFF
+        "cloth_size_range": [0.10, 0.2],  # DEPRECATED: use cloth.scale_range
+        "cloth_size": 0.26,  # DEPRECATED: use cloth.scale
         "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 1.5],
         "friction": 1.0,  # deterministic fallback if DR is OFF
@@ -103,7 +104,7 @@ RANDOMIZATION_DEFAULTS = {
         "useMassSpring": True,
         "springElasticStiffness_range": [30.0, 60.0],
         "spring_c_range": [0.08, 0.15],
-        "springElasticStiffness": 50.0,  # deterministic fallback if DR is OFF
+        "springElasticStiffness": 40.0,  # deterministic fallback if DR is OFF
         "spring_c": 0.1,  # deterministic fallback if DR is OFF
         "springDampingAllDirections": False,
         "useSelfCollision": True,
@@ -188,7 +189,7 @@ RANDOMIZATION_DEFAULTS = {
         # deterministic fallback
         "erp": 0.25,
         "contactERP": 0.25,
-        "numSolverIterations": 100,
+        "numSolverIterations": 40,
         "globalCFM": 1e-5,
         "solverResidualThreshold": 1e-5,
         "restitutionVelocityThreshold": 0.25,
@@ -199,7 +200,7 @@ RANDOMIZATION_DEFAULTS = {
     # deterministic fallback if DR is OFF
     "gravity": [0.0, 0.0, -9.81],
     # --- Environment settings ---
-    "task_name": "sideways",
+    "task_name": "sideways",  # diagonal / sideways / sideways_two_corners / sideways_one_corner / sideways_two_corners_mid
     "image_size": 100,
     "near_goal_radius": 0.06,
     "min_action_scale": 0.25,
@@ -218,14 +219,14 @@ ENV_DEFAULTS = {
     "output_max": 0.03,
     "robot_observation": "ee",  # "ctrl" or "ee"
     # "save_folder": "Generated value used from mujoco",
-    "timestep": 1.0 / 480.0,
+    "timestep": 1.0 / 240.0,
     # --- Task settings ---
     "fail_reward": -1.0,
     "extra_reward": 1.0,
     "goal_noise_range": [0.0, 0.03],
     "goal_noise": 0.0,
     "sparse_dense": True,
-    "success_distance": 0.05,
+    "success_distance": 0.187,
     "success_reward": 0,
 }
 

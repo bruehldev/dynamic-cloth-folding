@@ -56,16 +56,6 @@ class FoldingTask:
                 site_names.add(c["target"])
         self.sites = {name: i for i, name in enumerate(sorted(list(site_names)))}
 
-        # Make Bullet constraints use the real origin→target distance at reset time.
-        # This mirrors MuJoCo where the goal is the target site position.
-        EPS = 1e-6
-        for c in self.constraints:
-            idx1 = self.cloth._site_indices[c["origin"]]
-            idx2 = self.cloth._site_indices[c["target"]]
-            p1 = self.cloth.get_position(idx1)
-            p2 = self.cloth.get_position(idx2)
-            c["distance"] = float(max(EPS, np.linalg.norm(p2 - p1)))
-
         self.goal_dim = len(self.constraints)
 
         # Create and store the reward function
@@ -89,18 +79,12 @@ class FoldingTask:
         else:
             noise = self.goal_noise
 
+        # MuJoCo parity: the goal is the TARGET site position (plus noise), not an offset
         for i, c in enumerate(self.constraints):
-            # cloth_pos_I is a dict keyed by site names (e.g., "S0_0")
-            site1_pos = cloth_pos_I[c["origin"]]
-            site2_pos = cloth_pos_I[c["target"]]
-            direction = site2_pos - site1_pos
-            distance = np.linalg.norm(direction)
-            direction = direction / distance if distance > 0 else direction
-            goal[i * 3 : (i + 1) * 3] = site1_pos + direction * (
-                c["distance"] + noise * np.array(c["noise_directions"])
-            )
+            target_pos = cloth_pos_I[c["target"]]
+            goal[i * 3 : (i + 1) * 3] = target_pos + noise * np.array(c["noise_directions"])
 
-        return goal, noise
+        return goal.astype(np.float32), noise
 
     def get_achieved_goal(self, cloth_pos_I, sites=None):
         """
