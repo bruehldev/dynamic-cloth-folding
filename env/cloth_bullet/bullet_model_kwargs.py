@@ -102,26 +102,24 @@ RANDOMIZATION_DEFAULTS = {
         # Match demo cloth edge length (~0.10 m) for parity with MuJoCo recordings
         "scale_range": [0.2, 0.2],  # used when DR is ON
         "scale": 0.1,  # clothing is 2m x 2m
-        "scale_clearance_threshold": 0.15,
         "friction_range": [0.5, 0.5],
-        "friction": 0.5,
+        "friction": 0.6,
         "mass": 0.5,
-        "base_clearance": 0.05,
-        "extra_clearance_slope": 0.35,
-        "scale_clip_range": [0.10, 0.38],
+        "base_clearance": 0.01,
         "initial_pos": [0.5, 0.0],
         "useNeoHookean": False,
         "useBendingSprings": True,
         "useMassSpring": True,
-        "springElasticStiffness_range": [40.0, 40.0],
-        "springElasticStiffness": 40.0,
-        "spring_c_range": [0.1, 0.1],
-        "spring_c": 0.1,
-        "springBendingStiffness": 50.0,
+        "springElasticStiffness_range": [55.0, 65.0],
+        "springElasticStiffness": 80.0,
+        "spring_c_range": [0.18, 0.24],
+        "spring_c": 1.1,
+        "springBendingStiffness_range": [10.0, 18.0],
+        "springBendingStiffness": 10.0,
         "springDampingAllDirections": False,
         "useSelfCollision": True,
         "useFaceContact": True,
-        "settle_steps": 60,
+        "settle_steps": 80,
         "thickness": 0.0033,
     },
     "table": {
@@ -199,7 +197,7 @@ RANDOMIZATION_DEFAULTS = {
         # deterministic fallback
         "erp": 0.26,
         "contactERP": 0.28,
-        "numSolverIterations": 40,
+        "numSolverIterations": 50,
         "globalCFM": 1e-5,
         "solverResidualThreshold": 1e-5,
         "restitutionVelocityThreshold": 0.2,
@@ -230,7 +228,7 @@ ENV_DEFAULTS = {
     "output_max": 0.03,
     "robot_observation": "ee",  # "ctrl" or "ee"
     # "save_folder": "Generated value used from mujoco",
-    "timestep": 1.0 / 240.0,
+    "timestep": 1.0 / 210.0,
     # --- Task settings ---
     "fail_reward": -1.0,
     "extra_reward": 1.0,
@@ -280,10 +278,7 @@ def make_bullet_randomization_kwargs(
     assert "base_orn_euler" in cfg["robot"]
     assert "scale_range" in cfg["cloth"]
     assert "scale" in cfg["cloth"]
-    assert "scale_clip_range" in cfg["cloth"]
     assert "base_clearance" in cfg["cloth"]
-    assert "extra_clearance_slope" in cfg["cloth"]
-    assert "scale_clearance_threshold" in cfg["cloth"]
     assert "friction_range" in cfg["cloth"]
     assert "friction" in cfg["cloth"]
     assert "mass" in cfg["cloth"]
@@ -298,6 +293,8 @@ def make_bullet_randomization_kwargs(
     assert "springElasticStiffness" in cfg["cloth"]
     assert "spring_c_range" in cfg["cloth"]
     assert "spring_c" in cfg["cloth"]
+    assert "springBendingStiffness_range" in cfg["cloth"]
+    assert "springBendingStiffness" in cfg["cloth"]
     assert "type" in cfg["camera_config"]
     assert "train_camera_fovy" in cfg["camera_config"]
     assert "fovy_range" in cfg["camera_config"]

@@ -82,13 +82,10 @@ class ClothConfig(TypedDict, total=False):
     color_hi: Vec4
     scale_range: Vec2
     scale: float
-    scale_clearance_threshold: float
     friction_range: Vec2
     friction: float
     mass: float
     base_clearance: float
-    extra_clearance_slope: float
-    scale_clip_range: Vec2
     initial_pos: Vec2
     useNeoHookean: Union[int, bool]
     useBendingSprings: Union[int, bool]
