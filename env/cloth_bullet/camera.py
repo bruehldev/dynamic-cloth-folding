@@ -71,10 +71,6 @@ class Camera:
         eye = cam_spec["eye"]
         up = cam_spec["up"]
 
-        # If explicit absolute flag is set, use it
-        if cam_spec.get("is_absolute", False):
-            return eye, up
-
         # If any camera-related DR is on, treat eye as an offset.
         is_dr_active = (
             self.randomization_kwargs["camera_position_randomization"]
@@ -87,18 +83,15 @@ class Camera:
             # When DR is OFF, use the eye position as a fixed world coordinate for consistency
             return eye, up
 
-    def get_view_projection_matrices(self, _center_w_unused, override_fov=None):
+    def get_view_projection_matrices(self, _center_w_unused):
         # Use frozen episode parameters
         center_w = np.array(self._episode_center, dtype=float)
         eye = np.array(self._episode_eye, dtype=float)
         up = self._episode_up
-        fov = override_fov if override_fov is not None else self._episode_fov
+        fov = self._episode_fov
 
         # Match projection to the render buffer to avoid stretching
-        # Note: We assume square pixels here (aspect=width/height)
-        # If we render 100x100, aspect is 1.0. If 500x500, aspect is 1.0.
-        # This function assumes the aspect ratio of the TARGET render.
-        aspect = 1.0  # Assuming square for simplicity as both image_size and render_size are usually square
+        aspect = self.render_size[0] / self.render_size[1]
 
         view_matrix = p.computeViewMatrix(eye.tolist(), center_w.tolist(), up)
         near = float(self._cam_cfg["near_clip"])

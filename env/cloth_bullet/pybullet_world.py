@@ -14,7 +14,10 @@ class PyBulletWorld:
         self.timestep = timestep
         self.cfg = cfg
         # 1) Connect first
-        self.client_id = p.connect(p.GUI if self.has_viewer else p.DIRECT)
+        self.client_id = p.connect(
+            p.GUI if self.has_viewer else p.DIRECT,
+            options=("--width=2600 --height=2000" if self.has_viewer else ""),
+        )
         # 2) Headless -> load EGL immediately (before any URDF/meshes)
         if not self.has_viewer:
             egl_utils.load_egl()

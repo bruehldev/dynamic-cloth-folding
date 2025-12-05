@@ -51,6 +51,18 @@ RANDOMIZATION_DEFAULTS = {
                 "is_absolute": True,
                 "fov": 45.0,
             },
+            "eval_camera_back": {
+                "eye": [-0.39700, -0.52200, 0.73900],
+                "up": [0.0, 0.0, 1.0],
+                "is_absolute": True,
+                "fov": 45.0,
+            },
+            "eval_camera_close": {
+                "eye": [0.74200, -0.69700, 0.43900],
+                "up": [0.0, 0.0, 1.0],
+                "is_absolute": True,
+                "fov": 45.0,
+            },
         },
     },
     # default debug viewer camera (used only when has_viewer=True)
@@ -80,6 +92,7 @@ RANDOMIZATION_DEFAULTS = {
         # textures & colors
         "texture_dir": "assets/cloth/textures",
         "obj_dir": "assets/cloth/dr/expA/grid",
+        "n_cuts": 9,
         "obj_dir_fallback": "assets/cloth/perfect_9",
         "color_lo": [0.7, 0.7, 0.7, 1.0],
         "color_hi": [1.0, 1.0, 1.0, 1.0],
@@ -87,13 +100,11 @@ RANDOMIZATION_DEFAULTS = {
         "spawn_color_rgba": [0.4, 0.6, 1.0, 1.0],
         # physics-ish ranges used inside cloth_env_pybullet.py
         # Match demo cloth edge length (~0.10 m) for parity with MuJoCo recordings
-        "scale_range": [0.10, 0.10],  # used when DR is ON
-        "scale": 0.095,  # deterministic fallback used when DR is OFF
-        "cloth_size_range": [0.10, 0.2],  # DEPRECATED: use cloth.scale_range
-        "cloth_size": 0.26,  # DEPRECATED: use cloth.scale
+        "scale_range": [0.2, 0.2],  # used when DR is ON
+        "scale": 0.1,  # clothing is 2m x 2m
         "scale_clearance_threshold": 0.15,
-        "friction_range": [0.5, 1.5],
-        "friction": 1.0,  # deterministic fallback if DR is OFF
+        "friction_range": [0.5, 0.5],
+        "friction": 0.5,
         "mass": 0.5,
         "base_clearance": 0.05,
         "extra_clearance_slope": 0.35,
@@ -102,17 +113,16 @@ RANDOMIZATION_DEFAULTS = {
         "useNeoHookean": False,
         "useBendingSprings": True,
         "useMassSpring": True,
-        "springElasticStiffness_range": [30.0, 60.0],
-        "spring_c_range": [0.08, 0.15],
-        "springElasticStiffness": 40.0,  # deterministic fallback if DR is OFF
-        "spring_c": 0.1,  # deterministic fallback if DR is OFF
+        "springElasticStiffness_range": [40.0, 40.0],
+        "springElasticStiffness": 40.0,
+        "spring_c_range": [0.1, 0.1],
+        "spring_c": 0.1,
+        "springBendingStiffness": 50.0,
         "springDampingAllDirections": False,
         "useSelfCollision": True,
         "useFaceContact": True,
-        "collisionMargin_range": [0.012, 0.014],
-        "collisionMargin": 0.004,
         "settle_steps": 60,
-        "thickness": 0.002,
+        "thickness": 0.0033,
     },
     "table": {
         "color_lo": [0.55, 0.45, 0.35, 1.0],
@@ -137,7 +147,7 @@ RANDOMIZATION_DEFAULTS = {
             "visual_rgba": [0.8, 0.8, 0.8, 1.0],
         },
         "defaults": {
-            "table_lateral_friction": 0.8,
+            "table_lateral_friction": 1.8,
             "table_rolling_friction": 0.001,
             "table_spinning_friction": 0.001,
             "table_restitution": 0.1,
@@ -151,8 +161,8 @@ RANDOMIZATION_DEFAULTS = {
         "ang_damping": 0.3,
         "lateral_friction_range": [1.5, 3.5],
         "lateral_friction": 2.5,
-        "workspace_limits_min": [-0.4, -0.4, 0.00],
-        "workspace_limits_max": [0.07, 0.07, 0.15],
+        "workspace_limits_min": [-0.21, -0.21, 0.00],
+        "workspace_limits_max": [0.01, 0.01, 0.11],
         "base_pos": [0, 0, 0],
         "base_orn_euler": [0, 0, 0],
         "urdf_path": "franka_panda/panda.urdf",
@@ -177,30 +187,31 @@ RANDOMIZATION_DEFAULTS = {
     # world-level physics randomization
     "dynamics_randomization": True,
     "physics": {
-        "erp_range": [0.20, 0.30],
-        "contact_erp_range": [0.20, 0.30],
-        "global_cfm_range": [1e-6, 1e-4],
+        "erp_range": [0.24, 0.28],
+        "contact_erp_range": [0.24, 0.32],
+        "global_cfm_range": [1e-6, 1e-5],
         "solver_iters_range": [120, 200],
-        "residual_thresh_range": [1e-6, 1e-4],
-        "restitution_vel_thresh_range": [0.0, 0.5],
-        "contact_breaking_threshold_range": [0.02, 0.08],
+        "residual_thresh_range": [1e-6, 1e-5],
+        "restitution_vel_thresh_range": [0.0, 0.25],
+        "contact_breaking_threshold_range": [0.02, 0.06],
         "sparseSdfVoxelSize": 0.25,
         "sparse_sdf_voxel_size_range": [0.08, 0.12],
         # deterministic fallback
-        "erp": 0.25,
-        "contactERP": 0.25,
+        "erp": 0.26,
+        "contactERP": 0.28,
         "numSolverIterations": 40,
         "globalCFM": 1e-5,
         "solverResidualThreshold": 1e-5,
-        "restitutionVelocityThreshold": 0.25,
-        "contactBreakingThreshold": 0.05,
+        "restitutionVelocityThreshold": 0.2,
+        "contactBreakingThreshold": 0.035,
     },
     "gravity_randomization": True,
-    "gravity_range": [[0.0, 0.0, -10.2], [0.0, 0.0, -9.5]],
+    "gravity_range": [[0.0, 0.0, -9.4], [0.0, 0.0, -9.0]],
     # deterministic fallback if DR is OFF
     "gravity": [0.0, 0.0, -9.81],
     # --- Environment settings ---
-    "task_name": "sideways",  # diagonal / sideways / sideways_two_corners / sideways_one_corner / sideways_two_corners_mid
+    "task_name": "sideways",
+    # diagonal / sideways / sideways_two_corners / sideways_one_corner / sideways_two_corners_mid
     "image_size": 100,
     "near_goal_radius": 0.06,
     "min_action_scale": 0.25,
@@ -226,7 +237,7 @@ ENV_DEFAULTS = {
     "goal_noise_range": [0.0, 0.03],
     "goal_noise": 0.0,
     "sparse_dense": True,
-    "success_distance": 0.187,
+    "success_distance": 0.05,
     "success_reward": 0,
 }
 
@@ -287,8 +298,6 @@ def make_bullet_randomization_kwargs(
     assert "springElasticStiffness" in cfg["cloth"]
     assert "spring_c_range" in cfg["cloth"]
     assert "spring_c" in cfg["cloth"]
-    assert "collisionMargin_range" in cfg["cloth"]
-    assert "collisionMargin" in cfg["cloth"]
     assert "type" in cfg["camera_config"]
     assert "train_camera_fovy" in cfg["camera_config"]
     assert "fovy_range" in cfg["camera_config"]

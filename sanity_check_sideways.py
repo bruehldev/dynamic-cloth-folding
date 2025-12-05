@@ -45,7 +45,7 @@ def run_sideways_sanity_check():
 
     # Apply test-friendly overrides AFTER defaults/overrides are merged
     variant["env_kwargs"]["output_max"] = 0.05
-    variant["env_kwargs"]["success_distance"] = 0.187
+    variant["env_kwargs"]["success_distance"] = 0.06
     # variant["env_kwargs"]["fail_reward"] = -1.1
     # variant["env_kwargs"]["success_reward"] = 0.0
 

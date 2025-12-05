@@ -54,21 +54,21 @@ CONFIG: Dict[str, Any] = {
     },
     # ---- GRID (square cloth) ----
     "grid": {
-        "n_choices": [9],  # vertices per side
-        "edge_range": (0.8, 1.2),  # half-extent meters
-        "diagonal_choices": ["A", "B", "checker", "row-alt", "col-alt"],
-        "shear_x_range": (-0.2, 0.2),
-        "shear_y_range": (-0.1, 0.1),
-        "rot_deg_range": (-15.0, 15.0),
-        "scale_x_range": (0.85, 1.15),
-        "scale_y_range": (0.85, 1.15),
-        "edge_ruffle_amp_range": (0.0, 0.015),  # meters
-        "edge_ruffle_freq_choices": [6, 8, 10, 12],
-        "jitter_mm_range": (0.0, 3.0),
-        "uv_scale_u_range": (0.95, 1.05),
-        "uv_scale_v_range": (0.95, 1.05),
-        "uv_offset_u_range": (-0.05, 0.05),
-        "uv_offset_v_range": (-0.05, 0.05),
+        "n_choices": [12],  # vertices per side
+        "edge_range": (0.5, 0.5),  # Fixed size (e.g. 1.0m half-extent)
+        "diagonal_choices": ["A"],  # Fixed topology
+        "scale_x_range": (1.0, 1.0),
+        "scale_y_range": (1.0, 1.0),
+        "shear_x_range": (0.0, 0.0),
+        "shear_y_range": (0.0, 0.0),
+        "rot_deg_range": (0.0, 0.0),
+        "edge_ruffle_amp_range": (0.0, 0.0),
+        "edge_ruffle_freq_choices": [8],
+        "jitter_mm_range": (0.0, 0.0),
+        "uv_scale_u_range": (1.0, 1.0),
+        "uv_scale_v_range": (1.0, 1.0),
+        "uv_offset_u_range": (0.0, 0.0),
+        "uv_offset_v_range": (0.0, 0.0),
         # for perfect uvs:
         # "uv_scale_u_range": (1.0, 1.0),
         # "uv_scale_v_range": (1.0, 1.0),

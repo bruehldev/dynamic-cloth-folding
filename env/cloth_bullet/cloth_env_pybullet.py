@@ -120,11 +120,6 @@ class BulletClothEnv_:
         self.world = PyBulletWorld(self.has_viewer, self.timestep, self.randomization_kwargs)
         self.camera = Camera(self.image_size, self.randomization_kwargs)
         self.frame_stack = deque([], maxlen=self.frame_stack_size)
-        self._ws_vis_id = None  # Debug: id of the translucent workspace box
-        self._ws_line_ids = []  # Debug: store wireframe line ids so we can clear them
-        self._task_line_ids = []  # Debug: debug lines (origin→target / origin→goal)
-        self._task_marker_ids = []  # Debug: tiny spheres & labels for sites/goals
-        self._simple_goal_debug_ids = []  # Debug: markers for the simple EE goal
 
         robot_cfg = self.randomization_kwargs["robot"]
         self.limits_min = robot_cfg["workspace_limits_min"]
@@ -218,22 +213,9 @@ class BulletClothEnv_:
             self.world.get_table_top_z(),
         ]
 
-        # --- Cloth size ---
-        if self.randomization_kwargs["dynamics_randomization"]:
-            scale_guess = float(self.np_random.uniform(*cloth_cfg["scale_range"]))
-        else:
-            scale_guess = float(cloth_cfg["scale"])
-
-        # Clamp to keep Bullet stable
-        scale_clip_range = cloth_cfg["scale_clip_range"]
-        scale_guess = float(np.clip(scale_guess, scale_clip_range[0], scale_clip_range[1]))
-
         # Spawn a bit higher for larger cloth to avoid initial interpenetration
         base_clearance = cloth_cfg["base_clearance"]
-        extra_clearance_slope = cloth_cfg["extra_clearance_slope"]
-        clearance_thresh = cloth_cfg["scale_clearance_threshold"]
-        extra_clearance = max(0.0, (scale_guess - clearance_thresh)) * extra_clearance_slope
-        cloth_pos[2] = self.world.get_table_top_z() + base_clearance + extra_clearance
+        cloth_pos[2] = self.world.get_table_top_z() + base_clearance
 
         self.cloth = DeformableCloth(
             base_position=cloth_pos,
@@ -255,6 +237,7 @@ class BulletClothEnv_:
         center_idx = int(center_v_name.split("_")[1])
         self._camera_target = self.cloth.get_position(center_idx)
         self.camera.begin_episode(self._camera_target)
+        # self.camera.print_gui_camera_as_type()
 
         if self.simple_ee_task:
             self.task = None
@@ -361,13 +344,7 @@ class BulletClothEnv_:
         # Now show the fully initialized scene (single switch at the very end)
         try:
             if self.has_viewer:
-                vcam = self.randomization_kwargs["viewer_debug_camera"]
-                p.resetDebugVisualizerCamera(
-                    cameraDistance=float(vcam["distance"]),
-                    cameraYaw=float(vcam["yaw"]),
-                    cameraPitch=float(vcam["pitch"]),
-                    cameraTargetPosition=self._camera_target,
-                )
+                self.camera.set_debug_camera(self._camera_target, cam_type="eval_camera_close")
             p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
             if self.has_viewer:
                 p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
@@ -447,6 +424,7 @@ class BulletClothEnv_:
             if joint_positions is not None:
                 self.robot.apply_joint_positions(joint_positions)
             self.robot.force_fingers_closed()
+
             self.world.step()
 
             if i == image_obs_substep_idx:

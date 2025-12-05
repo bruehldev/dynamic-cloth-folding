@@ -26,18 +26,25 @@ class DeformableCloth:
         self._cached_verts_np = None  # Stores numpy array (Slow, lazy loaded)
         self._prev_verts_raw = None  # History for velocity (Tuple)
 
+        self.scale = self.cloth_cfg["scale"]
+        self.n_cuts = self.cloth_cfg["n_cuts"]
+
         # Determine physics properties
         if self.randomization_kwargs["dynamics_randomization"]:
             friction = float(np.random.uniform(*self.cloth_cfg["friction_range"]))
             spring_k = float(np.random.uniform(*self.cloth_cfg["springElasticStiffness_range"]))
             spring_c = float(np.random.uniform(*self.cloth_cfg["spring_c_range"]))
-            collision_margin = float(np.random.uniform(*self.cloth_cfg["collisionMargin_range"]))
+            spring_bend = float(np.random.uniform(*self.cloth_cfg["springBendingStiffness_range"]))
         else:
             friction = float(self.cloth_cfg["friction"])
             spring_k = float(self.cloth_cfg["springElasticStiffness"])
             spring_c = float(self.cloth_cfg["spring_c"])
-            collision_margin = float(self.cloth_cfg["collisionMargin"])
+            spring_bend = float(self.cloth_cfg["springBendingStiffness"])
 
+        # Original: edge_length = (2.0 * scale) / (self.n_cuts - 1) (for 2.0 mesh)
+        mesh_base_size = 2.0
+        edge_length = (mesh_base_size * self.scale) / (self.n_cuts - 1)
+        collision_margin = edge_length * 0.24
         # Select mesh
         mesh_path_to_load = None
         if self.randomization_kwargs["materials_randomization"]:
@@ -61,61 +68,43 @@ class DeformableCloth:
 
         self.mesh_path = mesh_path_to_load
 
-        def _load(scale_val):
+        def _load():
             with contextlib.suppress(Exception):
                 p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)
             return p.loadSoftBody(
                 self.mesh_path,
                 basePosition=base_position,
-                scale=scale_val,
+                scale=self.scale,
                 mass=self.cloth_cfg["mass"],
                 useNeoHookean=self.cloth_cfg["useNeoHookean"],
                 useBendingSprings=self.cloth_cfg["useBendingSprings"],
                 useMassSpring=self.cloth_cfg["useMassSpring"],
                 springElasticStiffness=spring_k,
+                springBendingStiffness=spring_bend,
                 springDampingStiffness=spring_c,
                 springDampingAllDirections=self.cloth_cfg["springDampingAllDirections"],
                 useSelfCollision=self.cloth_cfg["useSelfCollision"],
                 frictionCoeff=friction,
                 useFaceContact=self.cloth_cfg["useFaceContact"],
-                collisionMargin=collision_margin,
+                collisionMargin=collision_margin,  # Updated to use calculated margin
             )
 
-        if self.randomization_kwargs["dynamics_randomization"]:
-            scale = float(np.random.uniform(*self.cloth_cfg["scale_range"]))
-        else:
-            scale = float(self.cloth_cfg["scale"])
-
-        # cl = self.cloth_cfg["scale_clip_range"]
-        # scale = float(np.clip(scale, cl[0], cl[1]))
-
-        if target_edge_length is None:
-            self.cloth_id = _load(scale)
-            used_scale = float(scale)
-        else:
-            _temp_id = _load(scale)
-            try:
-                mn, mx = p.getAABB(_temp_id)
-                current_edge = max(mx[0] - mn[0], mx[1] - mn[1]) or 1e-6
-                desired_scale = (float(target_edge_length) / current_edge) * scale
-            finally:
-                p.removeBody(_temp_id)
-            self.cloth_id = _load(desired_scale)
-            used_scale = float(desired_scale)
+        self.cloth_id = _load()
 
         p.changeVisualShape(
             self.cloth_id,
             -1,
             flags=p.VISUAL_SHAPE_DOUBLE_SIDED,
-            rgbaColor=self.cloth_cfg["spawn_color_rgba"],
+            # rgbaColor=self.cloth_cfg["spawn_color_rgba"],
         )
         self._texture_id = None
-        self.scale = used_scale
         self.mass = float(self.cloth_cfg["mass"])
         self.springElasticStiffness = float(spring_k)
+        self.springBendingStiffness = float(spring_bend)
         self.springDampingStiffness = float(spring_c)
         self.frictionCoeff = float(friction)
         self.thickness = float(self.cloth_cfg["thickness"])
+        self.collisionMargin = collision_margin
 
         # Initialize History
         self.update()
