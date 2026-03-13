@@ -25,7 +25,7 @@ def apply_training_env_overrides(variant: TrainingConfigBase) -> dict:
     pck = variant.setdefault("path_collector_kwargs")
 
     # Processes
-    pck["num_processes"] = int(os.getenv("NUM_PROCS", pck.get("num_processes")))
+    # pck["num_processes"] = int(os.getenv("NUM_PROCS", pck.get("num_processes")))
 
     use_smoke = os.getenv("SMOKE_TRAIN", "0") == "1"
 

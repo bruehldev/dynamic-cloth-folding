@@ -1,27 +1,26 @@
-import mujoco_py
-import osc_binding
-import cv2
-import numpy as np
 import copy
-from gym.utils import seeding, EzPickle
-from utils import reward_calculation
-import gym
-import os
-from scipy import spatial
-from env.template_renderer import TemplateRenderer
-import math
-from collections import deque
-import copy
-from utils import mujoco_model_kwargs
-from shutil import copyfile
-import psutil
 import gc
-from xml.dom import minidom
-from mujoco_py.utils import remove_empty_lines
-import albumentations as A
-import pandas as pd
-from utils import task_definitions
 import logging
+import math
+import os
+from collections import deque
+from shutil import copyfile
+from xml.dom import minidom
+
+import albumentations as A
+import cv2
+import gym
+import mujoco_py
+import numpy as np
+import osc_binding
+import pandas as pd
+import psutil
+from gym.utils import EzPickle, seeding
+from mujoco_py.utils import remove_empty_lines
+from scipy import spatial
+
+from env.template_renderer import TemplateRenderer
+from utils import mujoco_model_kwargs, reward_calculation, task_definitions
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(message)s')
@@ -38,7 +37,7 @@ def compute_cosine_distance(vec1, vec2):
             return cosine_dist
 
 
-class ClothEnv_(object):
+class ClothEnv_:
     def __init__(
         self,
         timestep,
@@ -256,7 +255,7 @@ class ClothEnv_(object):
 
     def setup_viewer(self):
         if self.has_viewer:
-            if not self.viewer is None:
+            if self.viewer is not None:
                 del self.viewer
             self.viewer = mujoco_py.MjRenderContextOffscreen(
                 self.sim, device_id=-1)
@@ -298,9 +297,9 @@ class ClothEnv_(object):
         return remove_empty_lines(dom.toprettyxml(indent=" " * 4))
 
     def setup_initial_state_and_sim(self, model_kwargs):
-        if not self.mjpy_model is None:
+        if self.mjpy_model is not None:
             del self.mjpy_model
-        if not self.sim is None:
+        if self.sim is not None:
             del self.sim
         temp_xml_1 = self.template_renderer.render_template(
             "arena.xml", **model_kwargs)
@@ -439,7 +438,7 @@ class ClothEnv_(object):
                                     v in self.corner_index_mapping.items()}
         distances = {"0": 0, "1": 0, "2": 0, "3": 0}
         for i, contraint in enumerate(self.constraints):
-            if contraint['origin'] in inv_corner_index_mapping.keys():
+            if contraint['origin'] in inv_corner_index_mapping:
                 origin_pos = self.sim.data.get_site_xpos(
                     contraint['origin']).copy() - self.relative_origin
                 target_pos = self.goal[i *
@@ -747,7 +746,7 @@ class ClothEnv_(object):
         self.relative_origin = self.get_ee_position_W()
         self.goal, self.goal_noise = self.sample_goal_I()
 
-        if not self.viewer is None:
+        if self.viewer is not None:
             del self.viewer._markers[:]
 
         self.episode_ee_close_steps = 0
@@ -829,7 +828,7 @@ class ClothEnv_(object):
             v = int(point[1])
             cv2.circle(data, (u, v), point_size, (255, 0, 0), -1)
 
-        if not aux_output is None:
+        if aux_output is not None:
             for aux_idx in range(4):
                 aux_u = int(aux_output.flatten()[aux_idx*2]*width)
                 aux_v = int(aux_output.flatten()[aux_idx*2+1]*height)
