@@ -9,11 +9,11 @@ __pycache__/
 # virtual envs
 .venv/
 venv/
-env/
 
 # packaging/build
 build/
 dist/
+logs/
 *.egg-info/
 *.egg
 .eggs/
@@ -63,3 +63,5 @@ submodules/**/mujoco_py/generated/_pyxbld_*/
 
 # Local config not meant for CI
 settings.json
+terminal.log
+assets/
